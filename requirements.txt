@@ -1,0 +1,16 @@
+# EIA Data Collector - Python Dependencies
+# For collecting and processing electricity data from the EIA API
+
+# Core data processing
+pandas>=2.0.0
+numpy>=1.24.0
+
+# API requests and web operations
+requests>=2.31.0
+
+# Excel file creation
+openpyxl>=3.1.0
+
+# Optional but recommended for better performance
+# Uncomment if needed:
+# xlsxwriter>=3.1.0
