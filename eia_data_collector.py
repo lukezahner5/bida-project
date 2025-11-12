@@ -67,6 +67,77 @@ SECTORS = {
 # UTILITY FUNCTIONS
 # ============================================================================
 
+def format_facets_for_api(facets: Dict[str, List[str]]) -> Dict[str, List[str]]:
+    """
+    Format facets dictionary for EIA API v2 requirements.
+
+    EIA API v2 expects facets as: facets[location][]=VA&facets[location][]=CA
+    This function converts our dict format to what requests library needs.
+
+    Args:
+        facets: Dictionary of facet names to lists of values
+
+    Returns:
+        Dict with properly formatted parameter keys (as lists for multiple values)
+    """
+    formatted = {}
+    for facet_name, values in facets.items():
+        # Create keys like "facets[stateid][]" with list of values
+        key = f"facets[{facet_name}][]"
+        formatted[key] = values
+    return formatted
+
+
+def build_api_params(
+    frequency: str,
+    data_fields: List[str],
+    facets: Dict[str, List[str]],
+    start: str,
+    end: str,
+    offset: int = 0,
+    length: int = 5000,
+    sort_by: Optional[str] = None
+) -> Dict:
+    """
+    Build properly formatted parameters for EIA API v2.
+
+    Args:
+        frequency: Data frequency (annual, monthly, etc.)
+        data_fields: List of data fields to retrieve
+        facets: Dictionary of facets (e.g., {"location": ["US"], "fueltypeid": ["COL"]})
+        start: Start date
+        end: End date
+        offset: Pagination offset
+        length: Number of records to retrieve
+        sort_by: Optional sort column
+
+    Returns:
+        Dict of parameters formatted for EIA API v2
+    """
+    params = {
+        "frequency": frequency,
+        "start": start,
+        "end": end,
+        "offset": offset,
+        "length": length
+    }
+
+    # Add data fields with [] notation for arrays
+    for field in data_fields:
+        params["data[]"] = field if len(data_fields) == 1 else data_fields
+
+    # Add formatted facets
+    formatted_facets = format_facets_for_api(facets)
+    params.update(formatted_facets)
+
+    # Add sort if specified
+    if sort_by:
+        params["sort[0][column]"] = sort_by
+        params["sort[0][direction]"] = "asc"
+
+    return params
+
+
 def get_api_key() -> str:
     """
     Prompt user for EIA API key.
@@ -105,14 +176,19 @@ def test_api_connection(api_key: str) -> bool:
 
     test_url = f"{BASE_URL}/electricity/retail-sales/data/"
     headers = {"X-Api-Key": api_key}
+
+    # Build parameters with properly formatted facets
     params = {
         "frequency": "annual",
-        "data": ["sales"],
-        "facets": {"stateid": ["US"]},
+        "data[]": "sales",
         "start": "2023",
         "end": "2023",
         "length": 1
     }
+
+    # Add formatted facets
+    facets = format_facets_for_api({"stateid": ["US"]})
+    params.update(facets)
 
     try:
         response = requests.get(test_url, headers=headers, params=params, timeout=30)
@@ -261,19 +337,17 @@ def fetch_generation_by_source(api_key: str) -> pd.DataFrame:
     for location in locations:
         print(f"  Fetching data for {location}...")
 
-        params = {
-            "frequency": "annual",
-            "data": ["generation"],
-            "facets": {
+        params = build_api_params(
+            frequency="annual",
+            data_fields=["generation"],
+            facets={
                 "location": [location],
                 "fueltypeid": list(FUEL_TYPES.keys())
             },
-            "start": "2010",
-            "end": "2024",
-            "sort": [{"column": "period", "direction": "asc"}],
-            "offset": 0,
-            "length": 5000
-        }
+            start="2010",
+            end="2024",
+            sort_by="period"
+        )
 
         data = fetch_paginated_data(endpoint, api_key, params)
         all_records.extend(data)
@@ -348,19 +422,17 @@ def fetch_retail_sales_by_sector(api_key: str) -> pd.DataFrame:
     for location in locations:
         print(f"  Fetching data for {location}...")
 
-        params = {
-            "frequency": "annual",
-            "data": ["sales"],
-            "facets": {
+        params = build_api_params(
+            frequency="annual",
+            data_fields=["sales"],
+            facets={
                 "stateid": [location],
                 "sectorid": list(SECTORS.keys())
             },
-            "start": "2010",
-            "end": "2024",
-            "sort": [{"column": "period", "direction": "asc"}],
-            "offset": 0,
-            "length": 5000
-        }
+            start="2010",
+            end="2024",
+            sort_by="period"
+        )
 
         data = fetch_paginated_data(endpoint, api_key, params)
         all_records.extend(data)
@@ -430,19 +502,17 @@ def fetch_capacity_by_source(api_key: str) -> pd.DataFrame:
     for location in locations:
         print(f"  Fetching data for {location}...")
 
-        params = {
-            "frequency": "annual",
-            "data": ["nameplate-capacity-mw"],
-            "facets": {
+        params = build_api_params(
+            frequency="annual",
+            data_fields=["nameplate-capacity-mw"],
+            facets={
                 "location": [location],
                 "energy_source_code": list(FUEL_TYPES.keys())
             },
-            "start": "2015",
-            "end": "2024",
-            "sort": [{"column": "period", "direction": "asc"}],
-            "offset": 0,
-            "length": 5000
-        }
+            start="2015",
+            end="2024",
+            sort_by="period"
+        )
 
         data = fetch_paginated_data(endpoint, api_key, params)
         all_records.extend(data)
@@ -519,19 +589,17 @@ def fetch_seds_state_energy(api_key: str) -> pd.DataFrame:
     for msn in msn_codes:
         print(f"    Fetching {msn}...")
 
-        params = {
-            "frequency": "annual",
-            "data": ["value"],
-            "facets": {
+        params = build_api_params(
+            frequency="annual",
+            data_fields=["value"],
+            facets={
                 "stateid": ALL_STATES,
                 "msn": [msn]
             },
-            "start": "2010",
-            "end": "2023",
-            "sort": [{"column": "period", "direction": "asc"}],
-            "offset": 0,
-            "length": 5000
-        }
+            start="2010",
+            end="2023",
+            sort_by="period"
+        )
 
         data = fetch_paginated_data(endpoint, api_key, params)
         all_records.extend(data)
@@ -624,19 +692,17 @@ def fetch_electricity_prices(api_key: str) -> pd.DataFrame:
 
     print(f"  Fetching price data for all 50 states...")
 
-    params = {
-        "frequency": "annual",
-        "data": ["price"],
-        "facets": {
+    params = build_api_params(
+        frequency="annual",
+        data_fields=["price"],
+        facets={
             "stateid": ALL_STATES,
             "sectorid": ["ALL"]
         },
-        "start": "2010",
-        "end": "2024",
-        "sort": [{"column": "period", "direction": "asc"}],
-        "offset": 0,
-        "length": 5000
-    }
+        start="2010",
+        end="2024",
+        sort_by="period"
+    )
 
     data = fetch_paginated_data(endpoint, api_key, params)
     all_records.extend(data)
