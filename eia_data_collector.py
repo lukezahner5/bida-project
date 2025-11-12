@@ -522,7 +522,7 @@ def fetch_capacity_by_source(api_key: str) -> pd.DataFrame:
             frequency="monthly",
             data_fields=["nameplate-capacity-mw"],
             facets={
-                "location": [location],
+                "stateid": [location],  # Note: uses stateid, not location
                 "energy_source_code": list(FUEL_TYPES.keys())
             },
             start="2015-01",
@@ -541,10 +541,10 @@ def fetch_capacity_by_source(api_key: str) -> pd.DataFrame:
     # Process data
     df = pd.DataFrame(all_records)
 
-    if 'period' in df.columns and 'location' in df.columns and 'energy-source-code' in df.columns:
+    if 'period' in df.columns and 'stateid' in df.columns and 'energy-source-code' in df.columns:
         df['year'] = pd.to_numeric(df['period'].str[:4], errors='coerce')
         df['month'] = pd.to_numeric(df['period'].str[5:7], errors='coerce')
-        df['state'] = df['location']
+        df['state'] = df['stateid']
         df['fuel_type'] = df['energy-source-code'].map(FUEL_TYPES)
         df['capacity_mw'] = pd.to_numeric(df['nameplate-capacity-mw'], errors='coerce')
 
@@ -607,24 +607,34 @@ def fetch_seds_state_energy(api_key: str) -> pd.DataFrame:
 
     print(f"  Fetching data for all 50 states...")
 
+    # SEDS requires seriesId facet with format: SEDS.{MSN}.{STATE}.A
+    # We'll fetch all combinations of MSN codes and states
     for msn in msn_codes:
         print(f"    Fetching {msn}...")
 
-        params = build_api_params(
-            frequency="annual",
-            data_fields=["value"],
-            facets={
-                "stateId": ALL_STATES,  # Note: SEDS uses stateId (capital I)
-                "msn": [msn]
-            },
-            start="2010",
-            end="2023",
-            sort_by="period"
-        )
+        # Build series IDs for all states for this MSN code
+        series_ids = [f"SEDS.{msn}.{state}.A" for state in ALL_STATES]
 
-        data = fetch_paginated_data(endpoint, api_key, params)
-        all_records.extend(data)
-        time.sleep(0.5)
+        # SEDS API has a limit on facet values, so we may need to batch
+        # Fetch in batches of 50 series IDs at a time
+        batch_size = 50
+        for i in range(0, len(series_ids), batch_size):
+            batch = series_ids[i:i+batch_size]
+
+            params = build_api_params(
+                frequency="annual",
+                data_fields=["value"],
+                facets={
+                    "seriesId": batch  # Note: SEDS uses seriesId, not stateId or msn
+                },
+                start="2010",
+                end="2023",
+                sort_by="period"
+            )
+
+            data = fetch_paginated_data(endpoint, api_key, params)
+            all_records.extend(data)
+            time.sleep(0.5)
 
     if not all_records:
         print("  ✗ No data retrieved!")
@@ -633,10 +643,15 @@ def fetch_seds_state_energy(api_key: str) -> pd.DataFrame:
     # Process data
     df = pd.DataFrame(all_records)
 
-    if 'period' in df.columns and 'stateId' in df.columns and 'msn' in df.columns:
+    if 'period' in df.columns and 'seriesId' in df.columns:
         df['year'] = pd.to_numeric(df['period'].str[:4], errors='coerce')
-        df['state'] = df['stateId']
         df['value_btu'] = pd.to_numeric(df['value'], errors='coerce')
+
+        # Parse seriesId to extract MSN and state
+        # Format is: SEDS.{MSN}.{STATE}.A
+        df['series_parts'] = df['seriesId'].str.split('.')
+        df['msn'] = df['series_parts'].str[1]  # Extract MSN (e.g., TETCB)
+        df['state'] = df['series_parts'].str[2]  # Extract state (e.g., CA)
 
         # Map MSN codes to readable names
         msn_map = {
