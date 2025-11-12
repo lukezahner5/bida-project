@@ -299,6 +299,9 @@ def fetch_paginated_data(
 
         # Check if we got all data
         total = response_data["response"].get("total", 0)
+        # Convert total to int if it's a string
+        if isinstance(total, str):
+            total = int(total)
         if len(all_data) >= total or len(data) < length:
             break
 
