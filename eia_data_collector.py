@@ -123,8 +123,11 @@ def build_api_params(
     }
 
     # Add data fields with [] notation for arrays
-    for field in data_fields:
-        params["data[]"] = field if len(data_fields) == 1 else data_fields
+    # For single field, use string; for multiple, use list (requests handles it)
+    if len(data_fields) == 1:
+        params["data[]"] = data_fields[0]
+    else:
+        params["data[]"] = data_fields
 
     # Add formatted facets
     formatted_facets = format_facets_for_api(facets)
@@ -298,10 +301,15 @@ def fetch_paginated_data(
         all_data.extend(data)
 
         # Check if we got all data
+        # EIA API v2 returns numeric values as strings in JSON
         total = response_data["response"].get("total", 0)
-        # Convert total to int if it's a string
-        if isinstance(total, str):
-            total = int(total)
+        try:
+            # Convert total to int (handles both string and int cases)
+            total = int(total) if total else 0
+        except (ValueError, TypeError):
+            # If conversion fails, assume we got all data
+            total = len(all_data)
+
         if len(all_data) >= total or len(data) < length:
             break
 
