@@ -493,6 +493,9 @@ def fetch_capacity_by_source(api_key: str) -> pd.DataFrame:
     """
     Fetch electricity generation capacity by source (2015-2024).
 
+    Note: This endpoint only supports monthly frequency, so we fetch monthly data
+    and aggregate to annual by taking the December value (end-of-year capacity).
+
     Args:
         api_key: EIA API key
 
@@ -502,6 +505,7 @@ def fetch_capacity_by_source(api_key: str) -> pd.DataFrame:
     print("\n" + "=" * 70)
     print("3. Fetching Electricity Generation Capacity by Source (2015-2024)")
     print("=" * 70)
+    print("   (Note: Fetching monthly data and aggregating to annual)")
 
     start_time = time.time()
     endpoint = "/electricity/operating-generator-capacity/data/"
@@ -513,15 +517,16 @@ def fetch_capacity_by_source(api_key: str) -> pd.DataFrame:
     for location in locations:
         print(f"  Fetching data for {location}...")
 
+        # Use monthly frequency (only supported by this endpoint)
         params = build_api_params(
-            frequency="annual",
+            frequency="monthly",
             data_fields=["nameplate-capacity-mw"],
             facets={
                 "location": [location],
                 "energy_source_code": list(FUEL_TYPES.keys())
             },
-            start="2015",
-            end="2024",
+            start="2015-01",
+            end="2024-12",
             sort_by="period"
         )
 
@@ -538,12 +543,17 @@ def fetch_capacity_by_source(api_key: str) -> pd.DataFrame:
 
     if 'period' in df.columns and 'location' in df.columns and 'energy-source-code' in df.columns:
         df['year'] = pd.to_numeric(df['period'].str[:4], errors='coerce')
+        df['month'] = pd.to_numeric(df['period'].str[5:7], errors='coerce')
         df['state'] = df['location']
         df['fuel_type'] = df['energy-source-code'].map(FUEL_TYPES)
         df['capacity_mw'] = pd.to_numeric(df['nameplate-capacity-mw'], errors='coerce')
 
+        # Take December values for each year (end-of-year capacity)
+        # If December is missing, take the last available month
+        df_annual = df.sort_values(['year', 'month']).groupby(['year', 'state', 'fuel_type']).tail(1)
+
         # Pivot to wide format
-        pivot = df.pivot_table(
+        pivot = df_annual.pivot_table(
             index=['year', 'state'],
             columns='fuel_type',
             values='capacity_mw',
@@ -604,7 +614,7 @@ def fetch_seds_state_energy(api_key: str) -> pd.DataFrame:
             frequency="annual",
             data_fields=["value"],
             facets={
-                "stateid": ALL_STATES,
+                "stateId": ALL_STATES,  # Note: SEDS uses stateId (capital I)
                 "msn": [msn]
             },
             start="2010",
@@ -623,9 +633,9 @@ def fetch_seds_state_energy(api_key: str) -> pd.DataFrame:
     # Process data
     df = pd.DataFrame(all_records)
 
-    if 'period' in df.columns and 'stateid' in df.columns and 'msn' in df.columns:
+    if 'period' in df.columns and 'stateId' in df.columns and 'msn' in df.columns:
         df['year'] = pd.to_numeric(df['period'].str[:4], errors='coerce')
-        df['state'] = df['stateid']
+        df['state'] = df['stateId']
         df['value_btu'] = pd.to_numeric(df['value'], errors='coerce')
 
         # Map MSN codes to readable names
