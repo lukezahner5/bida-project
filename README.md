@@ -70,7 +70,7 @@ Annual electricity generation by fuel type (2010-2024)
 | `other_generation_gwh` | float | Other sources | GWh |
 | `total_generation_gwh` | float | Total generation | GWh |
 
-**Coverage:** US total + 10 priority states (TX, CA, FL, NY, PA, IL, OH, NC, GA, VA)
+**Coverage:** US total + all 50 US states
 
 **Note:** 1 GWh = 1,000 MWh = 1,000,000 kWh
 
@@ -88,7 +88,7 @@ Total electricity retail sales by customer sector (2010-2024)
 | `transportation_sales_gwh` | float | Transportation sector sales | GWh |
 | `total_sales_gwh` | float | All sectors total | GWh |
 
-**Coverage:** US total + 10 priority states
+**Coverage:** US total + all 50 US states
 
 **Key Insight:** Commercial sector includes data centers
 
@@ -109,7 +109,7 @@ Installed electricity generation capacity by fuel type (2015-2024)
 | `other_capacity_mw` | float | Other sources | MW |
 | `total_capacity_mw` | float | Total capacity | MW |
 
-**Coverage:** US total + 10 priority states
+**Coverage:** US total + all 50 US states
 
 **Note:** 1,000 MW = 1 GW (gigawatt)
 
