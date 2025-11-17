@@ -461,7 +461,14 @@ def train_random_forest_models(df: pd.DataFrame) -> Dict:
         # This is a simplification - real implementation would be more sophisticated
         predictions_2030[target] = rf.predict(X_2030)
 
-        print_progress(f"  R² = {r2:.3f}, MAE = {mae:.2f}%, RMSE = {rmse:.2f}%")
+        # Print performance with warnings for poor models
+        r2_display = f"R² = {r2:.3f}"
+        if r2 < 0:
+            r2_display += " ⚠ WARNING: Negative R² - model worse than baseline!"
+        elif r2 < 0.3:
+            r2_display += " ⚠ Low predictive power"
+
+        print_progress(f"  {r2_display}, MAE = {mae:.2f}%, RMSE = {rmse:.2f}%")
 
     # Create predictions dataframe
     predictions_df = df_2024[['state', 'state_name', 'region']].copy()
@@ -667,7 +674,9 @@ def run_scenario_analysis(
 
             # Add datacenter demand
             datacenter_gw = DATACENTER_DEMAND_GW.get(year, 50)
-            datacenter_gwh = datacenter_gw * 8760 * 0.9 / 1000  # GW to GWh (90% capacity factor)
+            # Convert GW to GWh: GW × hours × capacity_factor = GWh
+            # 1 GW running for 8760 hours at 90% capacity = 7,884 GWh
+            datacenter_gwh = datacenter_gw * 8760 * 0.9
             datacenter_gwh_adjusted = datacenter_gwh * params['demand_multiplier']
 
             total_demand = base_demand_future + datacenter_gwh_adjusted
@@ -708,7 +717,8 @@ def run_scenario_analysis(
     print_progress("\n  2030 Gap Analysis (positive = surplus, negative = deficit):")
     for scenario_name in scenarios.keys():
         scenario_2030 = scenario_df[(scenario_df['scenario'] == scenario_name) & (scenario_df['year'] == 2030)].iloc[0]
-        gap_gw = scenario_2030['gap_gwh'] / 8760 * 1000 / 0.9  # Convert back to GW
+        # Convert GWh to average GW: GWh / hours = GW
+        gap_gw = scenario_2030['gap_gwh'] / 8760
         gap_label = "surplus" if gap_gw > 0 else "deficit"
         print_progress(f"    {scenario_name}: {abs(gap_gw):.1f} GW {gap_label} ({scenario_2030['gap_percentage']:.1f}%)")
 
@@ -1054,6 +1064,8 @@ def assess_energy_scalability(df: pd.DataFrame, scenario_df: pd.DataFrame) -> Di
     gap_gwh = baseline_2030['gap_gwh']
 
     # Calculate required CAGR to fill gap (assuming each source fills a portion)
+    # If gap is negative (deficit), we need to ADD generation to fill it
+    # If gap is positive (surplus), we don't need to add more
     # Solar: 50%, Wind: 30%, Gas: 20%
     allocations = {
         'solar': 0.5,
@@ -1065,8 +1077,17 @@ def assess_energy_scalability(df: pd.DataFrame, scenario_df: pd.DataFrame) -> Di
 
     for source, allocation in allocations.items():
         current_gwh = us_2024[f'{source}_generation_gwh']
-        target_gap = gap_gwh * allocation
-        target_value = current_gwh + target_gap
+
+        # If deficit (gap < 0), we need to fill abs(gap) with new generation
+        # If surplus (gap > 0), no additional generation needed
+        if gap_gwh < 0:
+            # Deficit: need to add generation
+            target_gap = abs(gap_gwh) * allocation
+            target_value = current_gwh + target_gap
+        else:
+            # Surplus: maintain current level
+            target_gap = 0
+            target_value = current_gwh
 
         required_cagr = calculate_cagr(current_gwh, target_value, 6)
         historical_cagr = us_2024[f'{source}_cagr']
