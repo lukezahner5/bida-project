@@ -62,6 +62,64 @@ SECTORS = {
     "ALL": "total"
 }
 
+# State populations (2024 estimates) for per capita calculations
+STATE_POPULATIONS = {
+    'AL': 5108468, 'AK': 733406, 'AZ': 7431344, 'AR': 3067732,
+    'CA': 38965193, 'CO': 5877610, 'CT': 3617176, 'DE': 1031890,
+    'FL': 22610726, 'GA': 11029227, 'HI': 1435138, 'ID': 1964726,
+    'IL': 12549689, 'IN': 6862199, 'IA': 3207004, 'KS': 2940546,
+    'KY': 4526154, 'LA': 4573749, 'ME': 1395722, 'MD': 6164660,
+    'MA': 6981974, 'MI': 10037261, 'MN': 5737915, 'MS': 2939690,
+    'MO': 6196156, 'MT': 1122867, 'NE': 1978379, 'NV': 3194176,
+    'NH': 1402054, 'NJ': 9290841, 'NM': 2114371, 'NY': 19571216,
+    'NC': 10835491, 'ND': 783926, 'OH': 11785935, 'OK': 4053824,
+    'OR': 4233358, 'PA': 12961683, 'RI': 1095962, 'SC': 5373555,
+    'SD': 919318, 'TN': 7126489, 'TX': 30503301, 'UT': 3417734,
+    'VT': 647464, 'VA': 8715698, 'WA': 7812880, 'WV': 1770071,
+    'WI': 5910955, 'WY': 584057, 'DC': 678972
+}
+
+# State regions for regional analysis
+STATE_REGIONS = {
+    # Northeast
+    'CT': 'Northeast', 'ME': 'Northeast', 'MA': 'Northeast', 'NH': 'Northeast',
+    'NJ': 'Northeast', 'NY': 'Northeast', 'PA': 'Northeast', 'RI': 'Northeast',
+    'VT': 'Northeast',
+
+    # Midwest
+    'IL': 'Midwest', 'IN': 'Midwest', 'IA': 'Midwest', 'KS': 'Midwest',
+    'MI': 'Midwest', 'MN': 'Midwest', 'MO': 'Midwest', 'NE': 'Midwest',
+    'ND': 'Midwest', 'OH': 'Midwest', 'SD': 'Midwest', 'WI': 'Midwest',
+
+    # South
+    'AL': 'South', 'AR': 'South', 'DE': 'South', 'DC': 'South', 'FL': 'South',
+    'GA': 'South', 'KY': 'South', 'LA': 'South', 'MD': 'South', 'MS': 'South',
+    'NC': 'South', 'OK': 'South', 'SC': 'South', 'TN': 'South', 'TX': 'South',
+    'VA': 'South', 'WV': 'South',
+
+    # West
+    'AK': 'West', 'AZ': 'West', 'CA': 'West', 'CO': 'West', 'HI': 'West',
+    'ID': 'West', 'MT': 'West', 'NV': 'West', 'NM': 'West', 'OR': 'West',
+    'UT': 'West', 'WA': 'West', 'WY': 'West'
+}
+
+# State full names mapping
+STATE_NAMES = {
+    'AL': 'Alabama', 'AK': 'Alaska', 'AZ': 'Arizona', 'AR': 'Arkansas',
+    'CA': 'California', 'CO': 'Colorado', 'CT': 'Connecticut', 'DE': 'Delaware',
+    'FL': 'Florida', 'GA': 'Georgia', 'HI': 'Hawaii', 'ID': 'Idaho',
+    'IL': 'Illinois', 'IN': 'Indiana', 'IA': 'Iowa', 'KS': 'Kansas',
+    'KY': 'Kentucky', 'LA': 'Louisiana', 'ME': 'Maine', 'MD': 'Maryland',
+    'MA': 'Massachusetts', 'MI': 'Michigan', 'MN': 'Minnesota', 'MS': 'Mississippi',
+    'MO': 'Missouri', 'MT': 'Montana', 'NE': 'Nebraska', 'NV': 'Nevada',
+    'NH': 'New Hampshire', 'NJ': 'New Jersey', 'NM': 'New Mexico', 'NY': 'New York',
+    'NC': 'North Carolina', 'ND': 'North Dakota', 'OH': 'Ohio', 'OK': 'Oklahoma',
+    'OR': 'Oregon', 'PA': 'Pennsylvania', 'RI': 'Rhode Island', 'SC': 'South Carolina',
+    'SD': 'South Dakota', 'TN': 'Tennessee', 'TX': 'Texas', 'UT': 'Utah',
+    'VT': 'Vermont', 'VA': 'Virginia', 'WA': 'Washington', 'WV': 'West Virginia',
+    'WI': 'Wisconsin', 'WY': 'Wyoming', 'DC': 'District of Columbia', 'US': 'United States'
+}
+
 
 # ============================================================================
 # UTILITY FUNCTIONS
@@ -586,130 +644,6 @@ def fetch_capacity_by_source(api_key: str) -> pd.DataFrame:
         return pd.DataFrame()
 
 
-def fetch_seds_state_energy(api_key: str) -> pd.DataFrame:
-    """
-    Fetch State Energy Data System (SEDS) data for all 50 states (2010-2023).
-
-    Args:
-        api_key: EIA API key
-
-    Returns:
-        DataFrame: State energy consumption and production data
-    """
-    print("\n" + "=" * 70)
-    print("4. Fetching State Energy Data System (SEDS) - All 50 States (2010-2023)")
-    print("=" * 70)
-
-    start_time = time.time()
-    endpoint = "/seds/data/"
-
-    # SEDS MSN codes
-    msn_codes = ["TETCB", "TEPRB", "ESTCB"]
-
-    all_records = []
-
-    print(f"  Fetching data for all 50 states...")
-
-    # SEDS requires seriesId facet with format: SEDS.{MSN}.{STATE}.A
-    # We'll fetch all combinations of MSN codes and states
-    for msn in msn_codes:
-        print(f"    Fetching {msn}...")
-
-        # Build series IDs for all states for this MSN code
-        series_ids = [f"SEDS.{msn}.{state}.A" for state in ALL_STATES]
-
-        # SEDS API has a limit on facet values, so we may need to batch
-        # Fetch in batches of 50 series IDs at a time
-        batch_size = 50
-        for i in range(0, len(series_ids), batch_size):
-            batch = series_ids[i:i+batch_size]
-
-            params = build_api_params(
-                frequency="annual",
-                data_fields=["value"],
-                facets={
-                    "seriesId": batch  # Note: SEDS uses seriesId, not stateId or msn
-                },
-                start="2010",
-                end="2023",
-                sort_by="period"
-            )
-
-            data = fetch_paginated_data(endpoint, api_key, params)
-            all_records.extend(data)
-            time.sleep(0.5)
-
-    if not all_records:
-        print("  ✗ No data retrieved!")
-        return pd.DataFrame()
-
-    # Process data
-    df = pd.DataFrame(all_records)
-
-    if 'period' in df.columns and 'seriesId' in df.columns:
-        df['year'] = pd.to_numeric(df['period'].str[:4], errors='coerce')
-        df['value_btu'] = pd.to_numeric(df['value'], errors='coerce')
-
-        # Parse seriesId to extract MSN and state
-        # Format is: SEDS.{MSN}.{STATE}.A
-        df['series_parts'] = df['seriesId'].str.split('.')
-        df['msn'] = df['series_parts'].str[1]  # Extract MSN (e.g., TETCB)
-        df['state'] = df['series_parts'].str[2]  # Extract state (e.g., CA)
-
-        # Map MSN codes to readable names
-        msn_map = {
-            "TETCB": "total_energy_consumption_btu",
-            "TEPRB": "total_energy_production_btu",
-            "ESTCB": "total_electricity_consumption_btu"
-        }
-        df['metric'] = df['msn'].map(msn_map)
-
-        # Pivot to wide format
-        pivot = df.pivot_table(
-            index=['year', 'state'],
-            columns='metric',
-            values='value_btu',
-            aggfunc='sum'
-        ).reset_index()
-
-        # Add state names (simplified mapping)
-        state_names = {
-            "AL": "Alabama", "AK": "Alaska", "AZ": "Arizona", "AR": "Arkansas",
-            "CA": "California", "CO": "Colorado", "CT": "Connecticut", "DE": "Delaware",
-            "FL": "Florida", "GA": "Georgia", "HI": "Hawaii", "ID": "Idaho",
-            "IL": "Illinois", "IN": "Indiana", "IA": "Iowa", "KS": "Kansas",
-            "KY": "Kentucky", "LA": "Louisiana", "ME": "Maine", "MD": "Maryland",
-            "MA": "Massachusetts", "MI": "Michigan", "MN": "Minnesota", "MS": "Mississippi",
-            "MO": "Missouri", "MT": "Montana", "NE": "Nebraska", "NV": "Nevada",
-            "NH": "New Hampshire", "NJ": "New Jersey", "NM": "New Mexico", "NY": "New York",
-            "NC": "North Carolina", "ND": "North Dakota", "OH": "Ohio", "OK": "Oklahoma",
-            "OR": "Oregon", "PA": "Pennsylvania", "RI": "Rhode Island", "SC": "South Carolina",
-            "SD": "South Dakota", "TN": "Tennessee", "TX": "Texas", "UT": "Utah",
-            "VT": "Vermont", "VA": "Virginia", "WA": "Washington", "WV": "West Virginia",
-            "WI": "Wisconsin", "WY": "Wyoming"
-        }
-        pivot['state_name'] = pivot['state'].map(state_names)
-
-        # Reorder columns
-        cols = ['year', 'state', 'state_name', 'total_energy_consumption_btu',
-                'total_energy_production_btu', 'total_electricity_consumption_btu']
-        pivot = pivot[[col for col in cols if col in pivot.columns]]
-
-        # Fill NaN with 0
-        pivot = pivot.fillna(0)
-
-        # Sort
-        pivot = pivot.sort_values(['year', 'state']).reset_index(drop=True)
-
-        elapsed = time.time() - start_time
-        print(f"  ✓ Retrieved {len(pivot)} records in {elapsed:.1f} seconds")
-
-        return pivot
-    else:
-        print("  ✗ Unexpected data format!")
-        return pd.DataFrame()
-
-
 def fetch_electricity_prices(api_key: str) -> pd.DataFrame:
     """
     Fetch electricity prices by state (2010-2024).
@@ -721,7 +655,7 @@ def fetch_electricity_prices(api_key: str) -> pd.DataFrame:
         DataFrame: Average electricity prices by year and state
     """
     print("\n" + "=" * 70)
-    print("5. Fetching Electricity Prices by State (2010-2024)")
+    print("4. Fetching Electricity Prices by State (2010-2024)")
     print("=" * 70)
 
     start_time = time.time()
@@ -774,6 +708,345 @@ def fetch_electricity_prices(api_key: str) -> pd.DataFrame:
     else:
         print("  ✗ Unexpected data format!")
         return pd.DataFrame()
+
+
+def calculate_cagr(start_value: float, end_value: float, num_years: int) -> float:
+    """
+    Calculate Compound Annual Growth Rate (CAGR).
+
+    Args:
+        start_value: Starting value
+        end_value: Ending value
+        num_years: Number of years between start and end
+
+    Returns:
+        float: CAGR as a percentage
+    """
+    if pd.isna(start_value) or pd.isna(end_value) or start_value <= 0 or num_years <= 0:
+        return np.nan
+
+    try:
+        cagr = (((end_value / start_value) ** (1 / num_years)) - 1) * 100
+        return cagr
+    except (ZeroDivisionError, ValueError):
+        return np.nan
+
+
+def calculate_growth_metrics(df: pd.DataFrame, prices_df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Calculate growth metrics (CAGR) for each state.
+
+    Args:
+        df: Comprehensive metrics DataFrame
+        prices_df: Electricity prices DataFrame
+
+    Returns:
+        DataFrame: Input DataFrame with added growth metric columns
+    """
+    print("  Computing growth metrics (CAGR 2011-2024)...")
+
+    # We need 2011 and 2024 data for each state
+    growth_metrics = []
+
+    for state in df['state'].unique():
+        state_data = df[df['state'] == state].sort_values('year')
+
+        # Get 2011 and 2024 data (or closest available)
+        data_2011 = state_data[state_data['year'] == 2011]
+        data_2024 = state_data[state_data['year'] == 2024]
+
+        if data_2011.empty or data_2024.empty:
+            continue
+
+        # Calculate Generation CAGR
+        gen_2011 = data_2011['total_generation_gwh'].values[0]
+        gen_2024 = data_2024['total_generation_gwh'].values[0]
+        gen_cagr = calculate_cagr(gen_2011, gen_2024, 13)
+
+        # Calculate Renewable CAGR
+        renewable_2011 = (
+            data_2011.get('solar_generation_gwh', pd.Series([0])).values[0] +
+            data_2011.get('wind_generation_gwh', pd.Series([0])).values[0] +
+            data_2011.get('hydro_generation_gwh', pd.Series([0])).values[0]
+        )
+        renewable_2024 = (
+            data_2024.get('solar_generation_gwh', pd.Series([0])).values[0] +
+            data_2024.get('wind_generation_gwh', pd.Series([0])).values[0] +
+            data_2024.get('hydro_generation_gwh', pd.Series([0])).values[0]
+        )
+        renewable_cagr = calculate_cagr(renewable_2011, renewable_2024, 13)
+
+        growth_metrics.append({
+            'state': state,
+            'generation_cagr_pct': gen_cagr,
+            'renewable_cagr_pct': renewable_cagr
+        })
+
+    # Create growth metrics DataFrame
+    growth_df = pd.DataFrame(growth_metrics)
+
+    # Calculate price change from prices_df
+    price_changes = []
+    for state in prices_df['state'].unique():
+        state_prices = prices_df[prices_df['state'] == state].sort_values('year')
+        price_2011 = state_prices[state_prices['year'] == 2011]['avg_price_cents_per_kwh']
+        price_2024 = state_prices[state_prices['year'] == 2024]['avg_price_cents_per_kwh']
+
+        if not price_2011.empty and not price_2024.empty:
+            price_change = ((price_2024.values[0] - price_2011.values[0]) / price_2011.values[0]) * 100
+            price_changes.append({
+                'state': state,
+                'price_change_2011_2024_pct': price_change
+            })
+
+    price_change_df = pd.DataFrame(price_changes)
+
+    # Merge growth metrics with price changes
+    if not price_change_df.empty:
+        growth_df = growth_df.merge(price_change_df, on='state', how='left')
+
+    # Merge back into main dataframe
+    df = df.merge(growth_df, on='state', how='left')
+
+    return df
+
+
+def calculate_datacenter_suitability_score(row: pd.Series) -> float:
+    """
+    Calculate a composite datacenter suitability score (0-100) for a state.
+
+    Scoring components:
+    - 30 points: Surplus capacity (net generation balance)
+    - 25 points: Low electricity prices
+    - 20 points: Renewable percentage
+    - 15 points: Available capacity
+    - 10 points: Growth trajectory (generation CAGR)
+
+    Args:
+        row: DataFrame row with state metrics
+
+    Returns:
+        float: Suitability score from 0-100
+    """
+    score = 0.0
+
+    # 1. Surplus Capacity Score (30 points)
+    # Positive surplus is good, negative is bad
+    capacity_surplus = row.get('capacity_surplus_pct', np.nan)
+    if not pd.isna(capacity_surplus):
+        # Scale: -50% to +50% mapped to 0-30 points
+        # Clamp between -50 and +50
+        clamped_surplus = max(-50, min(50, capacity_surplus))
+        # Convert to 0-30 scale (0 at -50%, 15 at 0%, 30 at +50%)
+        surplus_score = ((clamped_surplus + 50) / 100) * 30
+        score += surplus_score
+
+    # 2. Low Price Score (25 points)
+    # Lower prices are better for data centers
+    price = row.get('avg_price_cents_per_kwh', np.nan)
+    if not pd.isna(price):
+        # US average is ~10.5 cents/kWh, range typically 7-20 cents
+        # Lower is better: 7 cents = 25 points, 20 cents = 0 points
+        if price <= 7:
+            price_score = 25
+        elif price >= 20:
+            price_score = 0
+        else:
+            # Linear scale from 7-20 cents
+            price_score = 25 * (1 - (price - 7) / 13)
+        score += price_score
+
+    # 3. Renewable Percentage Score (20 points)
+    # Higher renewable % is better
+    renewable_pct = row.get('renewable_percentage', np.nan)
+    if not pd.isna(renewable_pct):
+        # Scale: 0% to 100% mapped to 0-20 points
+        renewable_score = min(20, (renewable_pct / 100) * 20)
+        score += renewable_score
+
+    # 4. Available Capacity Score (15 points)
+    # More available capacity is better
+    available_capacity = row.get('available_capacity_mw', np.nan)
+    total_capacity = row.get('total_capacity_mw', np.nan)
+    if not pd.isna(available_capacity) and not pd.isna(total_capacity) and total_capacity > 0:
+        # Calculate available capacity as percentage
+        available_pct = (available_capacity / total_capacity) * 100
+        # Scale: 0% to 50% mapped to 0-15 points
+        available_score = min(15, (available_pct / 50) * 15)
+        score += available_score
+
+    # 5. Growth Trajectory Score (10 points)
+    # Moderate positive growth is good (not too fast, not negative)
+    gen_cagr = row.get('generation_cagr_pct', np.nan)
+    if not pd.isna(gen_cagr):
+        # Ideal range: 0% to 5% CAGR
+        # Above 5% might indicate capacity constraints
+        # Below 0% indicates declining market
+        if gen_cagr < 0:
+            growth_score = 0
+        elif gen_cagr <= 5:
+            growth_score = (gen_cagr / 5) * 10
+        else:
+            # Declining score above 5%
+            growth_score = max(0, 10 - ((gen_cagr - 5) / 5) * 5)
+        score += growth_score
+
+    return round(score, 2)
+
+
+def calculate_derived_metrics(
+    generation_df: pd.DataFrame,
+    sales_df: pd.DataFrame,
+    capacity_df: pd.DataFrame,
+    prices_df: pd.DataFrame
+) -> pd.DataFrame:
+    """
+    Calculate derived metrics by merging and computing additional fields.
+
+    Args:
+        generation_df: Generation by source data
+        sales_df: Retail sales by sector data
+        capacity_df: Capacity by source data
+        prices_df: Electricity prices data
+
+    Returns:
+        DataFrame: Comprehensive metrics with derived calculations
+    """
+    print("\n" + "=" * 70)
+    print("Calculating Derived Metrics...")
+    print("=" * 70)
+
+    # Merge all datasets on year and state
+    df = generation_df.merge(sales_df, on=['year', 'state'], how='outer')
+    df = df.merge(capacity_df, on=['year', 'state'], how='outer')
+    df = df.merge(prices_df, on=['year', 'state'], how='outer')
+
+    # Add state metadata
+    df['state_name'] = df['state'].map(STATE_NAMES)
+    df['population'] = df['state'].map(STATE_POPULATIONS)
+    df['region'] = df['state'].map(STATE_REGIONS)
+
+    # Calculate derived metrics
+    print("  Computing capacity metrics...")
+
+    # 1. Net Generation Balance (GWh)
+    df['net_generation_balance_gwh'] = df['total_generation_gwh'] - df['total_sales_gwh']
+
+    # 2. Capacity Surplus Percentage
+    df['capacity_surplus_pct'] = (df['net_generation_balance_gwh'] / df['total_generation_gwh'].replace(0, np.nan)) * 100
+
+    # 3. Generation Per Capita (MWh per person)
+    # Convert GWh to MWh (multiply by 1000)
+    df['generation_per_capita_mwh'] = (df['total_generation_gwh'] * 1000) / df['population'].replace(0, np.nan)
+
+    # 4. Consumption Per Capita (MWh per person)
+    df['consumption_per_capita_mwh'] = (df['total_sales_gwh'] * 1000) / df['population'].replace(0, np.nan)
+
+    # 5. Renewable Percentage
+    renewable_generation = (
+        df.get('solar_generation_gwh', 0) +
+        df.get('wind_generation_gwh', 0) +
+        df.get('hydro_generation_gwh', 0)
+    )
+    df['renewable_percentage'] = (renewable_generation / df['total_generation_gwh'].replace(0, np.nan)) * 100
+
+    # 6. Capacity Utilization (%)
+    # Total possible generation = capacity (MW) × 8760 hours/year
+    # Convert MW to GW, then multiply by 8760 to get GWh
+    total_possible_gwh = (df['total_capacity_mw'] / 1000) * 8760
+    df['capacity_utilization_pct'] = (df['total_generation_gwh'] / total_possible_gwh.replace(0, np.nan)) * 100
+
+    # 7. Available Capacity (MW)
+    # Available capacity = Total capacity × (1 - utilization rate as decimal)
+    utilization_decimal = df['capacity_utilization_pct'] / 100
+    df['available_capacity_mw'] = df['total_capacity_mw'] * (1 - utilization_decimal)
+
+    # 8-10. Growth Metrics (CAGR)
+    df = calculate_growth_metrics(df, prices_df)
+
+    # Fill infinite values with NaN
+    df = df.replace([np.inf, -np.inf], np.nan)
+
+    # Calculate datacenter suitability score for 2024 data
+    print("  Computing datacenter suitability scores...")
+    df['datacenter_suitability_score'] = df.apply(calculate_datacenter_suitability_score, axis=1)
+
+    # Sort by year and state
+    df = df.sort_values(['year', 'state']).reset_index(drop=True)
+
+    print(f"  ✓ Calculated derived metrics for {len(df)} records")
+    print(f"  ✓ Added fields: population, region, capacity metrics,")
+    print(f"     growth metrics (CAGR), and datacenter suitability scores")
+
+    return df
+
+
+def create_2024_analysis(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Create 2024-specific analysis file with rankings.
+
+    Args:
+        df: Comprehensive metrics DataFrame
+
+    Returns:
+        DataFrame: 2024 data only, sorted by suitability score
+    """
+    print("\n" + "=" * 70)
+    print("Creating 2024 State Capacity Analysis...")
+    print("=" * 70)
+
+    # Filter for 2024 data only
+    df_2024 = df[df['year'] == 2024].copy()
+
+    # Exclude US total for state rankings
+    df_2024_states = df_2024[df_2024['state'] != 'US'].copy()
+
+    if df_2024_states.empty:
+        print("  ✗ No 2024 data available!")
+        return pd.DataFrame()
+
+    # Sort by suitability score (descending)
+    df_2024_states = df_2024_states.sort_values('datacenter_suitability_score', ascending=False)
+
+    # Add ranking column
+    df_2024_states['suitability_rank'] = range(1, len(df_2024_states) + 1)
+
+    # Select key columns for analysis
+    analysis_columns = [
+        'suitability_rank',
+        'state',
+        'state_name',
+        'region',
+        'datacenter_suitability_score',
+        'net_generation_balance_gwh',
+        'capacity_surplus_pct',
+        'available_capacity_mw',
+        'total_capacity_mw',
+        'capacity_utilization_pct',
+        'renewable_percentage',
+        'avg_price_cents_per_kwh',
+        'generation_cagr_pct',
+        'renewable_cagr_pct',
+        'price_change_2011_2024_pct',
+        'population',
+        'total_generation_gwh',
+        'total_sales_gwh',
+        'commercial_sales_gwh'
+    ]
+
+    # Filter to include only columns that exist
+    existing_columns = [col for col in analysis_columns if col in df_2024_states.columns]
+    df_2024_analysis = df_2024_states[existing_columns].copy()
+
+    print(f"  ✓ Created 2024 analysis for {len(df_2024_analysis)} states")
+    print(f"\n  Top 5 States for Datacenter Development (2024):")
+    for i, row in df_2024_analysis.head(5).iterrows():
+        state_name = row.get('state_name', row['state'])
+        score = row.get('datacenter_suitability_score', 0)
+        surplus = row.get('capacity_surplus_pct', 0)
+        print(f"    {int(row['suitability_rank'])}. {state_name} - Score: {score:.1f}, Surplus: {surplus:.1f}%")
+
+    return df_2024_analysis
 
 
 # ============================================================================
@@ -851,12 +1124,13 @@ def validate_and_report(
     return report
 
 
-def print_validation_report(reports: List[Dict]) -> str:
+def print_validation_report(reports: List[Dict], df_2024: Optional[pd.DataFrame] = None) -> str:
     """
-    Print and return formatted validation report.
+    Print and return formatted validation report with enhanced analytics.
 
     Args:
         reports: List of validation report dictionaries
+        df_2024: Optional 2024 analysis DataFrame for enhanced reporting
 
     Returns:
         str: Formatted report text
@@ -891,6 +1165,60 @@ def print_validation_report(reports: List[Dict]) -> str:
                 report_text.append(f"      - {error}")
         else:
             report_text.append("   ✓ All validation checks passed")
+
+    # Enhanced Analytics Section
+    if df_2024 is not None and not df_2024.empty:
+        report_text.append("\n" + "=" * 70)
+        report_text.append("2024 STATE CAPACITY ANALYSIS - KEY INSIGHTS")
+        report_text.append("=" * 70)
+
+        # Top 10 states by surplus capacity
+        report_text.append("\nTop 10 States by Capacity Surplus (Net Exporters):")
+        report_text.append("-" * 70)
+        top_surplus = df_2024.nlargest(10, 'capacity_surplus_pct')[
+            ['state', 'state_name', 'capacity_surplus_pct', 'net_generation_balance_gwh']
+        ]
+        for idx, (_, row) in enumerate(top_surplus.iterrows(), 1):
+            state_name = row.get('state_name', row['state'])
+            surplus_pct = row.get('capacity_surplus_pct', 0)
+            balance = row.get('net_generation_balance_gwh', 0)
+            report_text.append(f"   {idx:2d}. {state_name:20s} - {surplus_pct:6.1f}% surplus ({balance:10,.0f} GWh net export)")
+
+        # Top 10 states by deficit (bottom 10 by surplus)
+        report_text.append("\nTop 10 States by Capacity Deficit (Net Importers):")
+        report_text.append("-" * 70)
+        top_deficit = df_2024.nsmallest(10, 'capacity_surplus_pct')[
+            ['state', 'state_name', 'capacity_surplus_pct', 'net_generation_balance_gwh']
+        ]
+        for idx, (_, row) in enumerate(top_deficit.iterrows(), 1):
+            state_name = row.get('state_name', row['state'])
+            surplus_pct = row.get('capacity_surplus_pct', 0)
+            balance = row.get('net_generation_balance_gwh', 0)
+            report_text.append(f"   {idx:2d}. {state_name:20s} - {surplus_pct:6.1f}% deficit ({abs(balance):10,.0f} GWh net import)")
+
+        # Top 10 by renewable percentage
+        report_text.append("\nTop 10 States by Renewable Energy Percentage:")
+        report_text.append("-" * 70)
+        top_renewable = df_2024.nlargest(10, 'renewable_percentage')[
+            ['state', 'state_name', 'renewable_percentage']
+        ]
+        for idx, (_, row) in enumerate(top_renewable.iterrows(), 1):
+            state_name = row.get('state_name', row['state'])
+            renewable_pct = row.get('renewable_percentage', 0)
+            report_text.append(f"   {idx:2d}. {state_name:20s} - {renewable_pct:5.1f}% renewable")
+
+        # Top 10 by datacenter suitability score
+        report_text.append("\nTop 10 States for Datacenter Development (Suitability Score):")
+        report_text.append("-" * 70)
+        top_suitability = df_2024.nlargest(10, 'datacenter_suitability_score')[
+            ['state', 'state_name', 'datacenter_suitability_score', 'available_capacity_mw', 'avg_price_cents_per_kwh']
+        ]
+        for idx, (_, row) in enumerate(top_suitability.iterrows(), 1):
+            state_name = row.get('state_name', row['state'])
+            score = row.get('datacenter_suitability_score', 0)
+            avail_cap = row.get('available_capacity_mw', 0)
+            price = row.get('avg_price_cents_per_kwh', 0)
+            report_text.append(f"   {idx:2d}. {state_name:20s} - Score: {score:5.1f}, Avail: {avail_cap:10,.0f} MW, Price: {price:4.1f}¢/kWh")
 
     report_text.append("\n" + "=" * 70)
 
@@ -1023,11 +1351,21 @@ def main():
     # 3. Capacity by source
     datasets['eia_capacity_by_source'] = fetch_capacity_by_source(api_key)
 
-    # 4. SEDS state energy
-    datasets['eia_state_energy_seds'] = fetch_seds_state_energy(api_key)
-
-    # 5. Electricity prices
+    # 4. Electricity prices
     datasets['eia_electricity_prices'] = fetch_electricity_prices(api_key)
+
+    # 5. Calculate comprehensive metrics with derived fields
+    datasets['eia_comprehensive_metrics'] = calculate_derived_metrics(
+        datasets['eia_generation_by_source'],
+        datasets['eia_retail_sales_by_sector'],
+        datasets['eia_capacity_by_source'],
+        datasets['eia_electricity_prices']
+    )
+
+    # 6. Create 2024-specific analysis for datacenter site selection
+    datasets['state_capacity_analysis_2024'] = create_2024_analysis(
+        datasets['eia_comprehensive_metrics']
+    )
 
     total_time = time.time() - collection_start
 
@@ -1056,21 +1394,30 @@ def main():
             ["US"] + ALL_STATES
         ),
         validate_and_report(
-            datasets['eia_state_energy_seds'],
-            'State Energy Data System (SEDS)',
-            (2010, 2023),
-            ALL_STATES
-        ),
-        validate_and_report(
             datasets['eia_electricity_prices'],
             'Electricity Prices by State',
             (2010, 2024),
             ALL_STATES
         ),
+        validate_and_report(
+            datasets['eia_comprehensive_metrics'],
+            'Comprehensive Metrics with Derived Fields',
+            (2010, 2024),
+            ["US"] + ALL_STATES
+        ),
+        validate_and_report(
+            datasets['state_capacity_analysis_2024'],
+            '2024 State Capacity Analysis',
+            (2024, 2024),
+            ALL_STATES
+        ),
     ]
 
-    # Print validation report
-    report_text = print_validation_report(validation_reports)
+    # Print validation report with enhanced 2024 analytics
+    report_text = print_validation_report(
+        validation_reports,
+        datasets['state_capacity_analysis_2024']
+    )
 
     # Save validation report to file
     report_file = output_dir / "data_quality_report.txt"
