@@ -256,7 +256,96 @@ This file contains 2024 data only, sorted by datacenter suitability score for ea
 
 ## Data Quality Notes
 
-### Known Limitations
+### Statistical Analysis & Predictive Modeling
+
+The project includes `datacenter_energy_analysis.py`, a comprehensive statistical modeling script that uses the collected EIA data to support datacenter site selection and energy procurement decisions.
+
+### Features
+
+**Predictive Models:**
+- **Random Forest Regression** - Predicts 2030 energy mix for each state
+- **Time Series Forecasting** - Projects US generation by source through 2030
+- **Logistic Regression** - Identifies factors driving renewable energy adoption
+- **K-Means Clustering** - Groups states by similar energy characteristics
+
+**Scenario Analysis:**
+- **Baseline** - Historical growth rates continue
+- **Accelerated Renewable** - Policy push for faster deployment
+- **Constrained** - Permitting delays slow buildout
+- **AI Boom** - Datacenter demand exceeds Goldman Sachs projections
+
+**Suitability Scoring:**
+- Composite 0-100 score based on:
+  - Surplus capacity (30 pts)
+  - Low electricity prices (25 pts)
+  - Renewable percentage (20 pts)
+  - Growth trajectory (15 pts)
+  - Absolute capacity scale (10 pts)
+- Risk assessment and tier classifications
+- State-by-state rankings
+
+**Energy Source Scalability:**
+- Required vs. historical growth rates
+- Deployment timeline analysis
+- Feasibility assessments
+
+### Output Files
+
+The analysis script generates 15+ CSV files ready for Tableau import:
+
+**Core Analysis:**
+- `tableau_master_data.csv` - Master dataset for all states and years
+- `state_analysis_2024.csv` - Current snapshot with suitability scores
+- `state_predictions_2030.csv` - Predicted 2030 energy mix by state
+- `key_statistics.json` - Summary metrics for presentations
+
+**Forecasts & Scenarios:**
+- `us_forecast_by_source_2025_2030.csv` - National forecasts with confidence intervals
+- `scenario_analysis_all.csv` - Four scenarios through 2030
+- `energy_source_scalability.csv` - Can sources scale fast enough?
+- `deployment_timeline_analysis.csv` - Timeline to add needed capacity
+
+**Model Outputs:**
+- `random_forest_feature_importance.csv` - What drives energy mix predictions
+- `random_forest_model_performance.csv` - Model accuracy metrics
+- `logistic_regression_coefficients.csv` - Renewable adoption success factors
+- `renewable_adoption_predictions.csv` - Probability each state reaches 50% renewable
+
+**Clustering & Alternatives:**
+- `state_clusters.csv` - State groupings by energy profile
+- `cluster_profiles.csv` - Characteristics of each cluster
+- `alternative_locations.csv` - Similar states to current datacenter hubs
+
+### Usage Example
+
+```bash
+# Step 1: Collect data
+python eia_data_collector.py
+
+# Step 2: Run analysis
+python datacenter_energy_analysis.py
+```
+
+The analysis script will:
+1. Load all EIA datasets
+2. Calculate derived metrics and growth rates
+3. Train 5 machine learning models
+4. Generate forecasts and scenarios
+5. Score states for datacenter suitability
+6. Export all results to CSV files
+
+**Typical runtime:** 2-3 minutes
+
+### Key Insights Generated
+
+- Top 5 recommended states for datacenter development
+- Projected energy gap by 2030 under different scenarios
+- Required solar/wind growth rates to meet demand
+- States most likely to reach 50% renewable by 2030
+- Alternative locations similar to existing datacenter hubs
+- Risk assessment of current datacenter hub states
+
+## Known Limitations
 
 1. **Capacity Data:** Only available from 2015 onwards (not 2010)
 2. **Missing Values:** Some states may have incomplete data for certain years
@@ -413,6 +502,18 @@ For script issues:
 - Ensure all dependencies are installed
 
 ## Version History
+
+**v3.0 (2025-11-17)**
+- **NEW:** Added `datacenter_energy_analysis.py` - comprehensive statistical modeling script
+- **NEW:** Random Forest models for 2030 energy mix predictions (5 models)
+- **NEW:** Time series forecasting for US generation by source
+- **NEW:** Scenario analysis (baseline, accelerated renewable, constrained, AI boom)
+- **NEW:** K-Means clustering for state grouping and alternative location identification
+- **NEW:** Logistic regression for renewable adoption factor analysis
+- **NEW:** Energy source scalability assessment (required vs. historical growth rates)
+- **NEW:** 15+ analysis output files ready for Tableau visualization
+- Added machine learning dependencies (scikit-learn, scipy)
+- Comprehensive README documentation for statistical analysis capabilities
 
 **v2.0 (2025-11-17)**
 - Added growth metrics (CAGR) for generation, renewables, and prices (2011-2024)
