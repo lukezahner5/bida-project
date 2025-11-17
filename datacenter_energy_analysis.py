@@ -1258,7 +1258,7 @@ def save_all_outputs(
     key_stats = {
         'national': {
             'baseline_gap_2030_gwh': float(baseline_2030['gap_gwh']),
-            'baseline_gap_2030_gw': float(baseline_2030['gap_gwh'] / 8760 * 1000 / 0.9),
+            'baseline_gap_2030_gw': float(baseline_2030['gap_gwh'] / 8760),  # GWh / hours = average GW
             'gap_percentage': float(baseline_2030['gap_percentage']),
             'renewable_pct_2030_baseline': float(baseline_2030['renewable_pct']),
         },
@@ -1321,7 +1321,7 @@ def main():
 
         # Get key metrics for summary
         baseline_2030 = scenario_df[(scenario_df['scenario'] == 'baseline') & (scenario_df['year'] == 2030)].iloc[0]
-        gap_gw = baseline_2030['gap_gwh'] / 8760 * 1000 / 0.9
+        gap_gw = baseline_2030['gap_gwh'] / 8760  # GWh / hours = average GW
 
         top_state = suitability_df.iloc[0]
 
