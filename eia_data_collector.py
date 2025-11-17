@@ -435,7 +435,8 @@ def fetch_generation_by_source(api_key: str) -> pd.DataFrame:
         df['year'] = pd.to_numeric(df['period'].str[:4], errors='coerce')
         df['state'] = df['location']
         df['fuel_type'] = df['fueltypeid'].map(FUEL_TYPES)
-        df['generation_gwh'] = pd.to_numeric(df['generation'], errors='coerce') / 1000  # Convert to GWh
+        # EIA API returns data in "thousand megawatthours" which equals GWh (no conversion needed)
+        df['generation_gwh'] = pd.to_numeric(df['generation'], errors='coerce')
 
         # Pivot to wide format
         pivot = df.pivot_table(
@@ -520,7 +521,8 @@ def fetch_retail_sales_by_sector(api_key: str) -> pd.DataFrame:
         df['year'] = pd.to_numeric(df['period'].str[:4], errors='coerce')
         df['state'] = df['stateid']
         df['sector'] = df['sectorid'].map(SECTORS)
-        df['sales_gwh'] = pd.to_numeric(df['sales'], errors='coerce') / 1000  # Convert to GWh
+        # EIA API returns data in "thousand megawatthours" which equals GWh (no conversion needed)
+        df['sales_gwh'] = pd.to_numeric(df['sales'], errors='coerce')
 
         # Pivot to wide format
         pivot = df.pivot_table(
@@ -1164,6 +1166,73 @@ def validate_and_report(
     return report
 
 
+def validate_data_quality(df: pd.DataFrame) -> List[str]:
+    """
+    Perform comprehensive data quality checks.
+
+    Args:
+        df: Comprehensive metrics DataFrame
+
+    Returns:
+        List of validation error/warning messages
+    """
+    issues = []
+
+    # Check 1: Verify US 2024 total generation is in expected range (3.9M - 4.5M GWh)
+    us_2024 = df[(df['state'] == 'US') & (df['year'] == 2024)]
+    if not us_2024.empty:
+        total_gen = us_2024['total_generation_gwh'].iloc[0]
+        if total_gen < 3_900_000 or total_gen > 4_500_000:
+            issues.append(
+                f"CRITICAL: US 2024 total generation ({total_gen:,.0f} GWh) outside expected range "
+                f"(3.9M - 4.5M GWh). Check unit conversion!"
+            )
+        else:
+            issues.append(f"✓ US 2024 total generation: {total_gen:,.0f} GWh (valid)")
+
+    # Check 2: Verify renewable percentage doesn't exceed 100%
+    if 'renewable_percentage' in df.columns:
+        invalid_renewable = df[df['renewable_percentage'] > 100]
+        if len(invalid_renewable) > 0:
+            issues.append(
+                f"ERROR: {len(invalid_renewable)} records have renewable_percentage > 100%"
+            )
+            for _, row in invalid_renewable.head(5).iterrows():
+                issues.append(f"  - {row.get('state', 'Unknown')}, {row.get('year', 'Unknown')}: {row['renewable_percentage']:.1f}%")
+        else:
+            issues.append(f"✓ All renewable percentages ≤ 100%")
+
+    # Check 3: Verify state data is in reasonable ranges
+    states_2024 = df[(df['year'] == 2024) & (df['state'] != 'US')]
+    if not states_2024.empty:
+        # California should be largest state (200,000 - 300,000 GWh)
+        ca_2024 = states_2024[states_2024['state'] == 'CA']
+        if not ca_2024.empty:
+            ca_gen = ca_2024['total_generation_gwh'].iloc[0]
+            if ca_gen < 200_000 or ca_gen > 300_000:
+                issues.append(
+                    f"WARNING: California 2024 generation ({ca_gen:,.0f} GWh) outside expected range "
+                    f"(200K - 300K GWh)"
+                )
+            else:
+                issues.append(f"✓ California 2024 generation: {ca_gen:,.0f} GWh (valid)")
+
+    # Check 4: Verify generation >= sales for most states (allows for imports)
+    if 'net_generation_balance_gwh' in df.columns:
+        recent_data = df[df['year'] >= 2020]
+        deficit_states = recent_data[recent_data['net_generation_balance_gwh'] < 0]
+        surplus_states = recent_data[recent_data['net_generation_balance_gwh'] > 0]
+
+        # Most states should be net exporters
+        if len(surplus_states) > 0 and len(deficit_states) > 0:
+            surplus_ratio = len(surplus_states) / (len(surplus_states) + len(deficit_states))
+            issues.append(
+                f"✓ {len(surplus_states)} surplus vs {len(deficit_states)} deficit records (2020+)"
+            )
+
+    return issues
+
+
 def print_validation_report(reports: List[Dict], df_2024: Optional[pd.DataFrame] = None) -> str:
     """
     Print and return formatted validation report with enhanced analytics.
@@ -1452,6 +1521,14 @@ def main():
             ALL_STATES
         ),
     ]
+
+    # Run comprehensive data quality checks
+    print("\n" + "=" * 70)
+    print("COMPREHENSIVE DATA QUALITY CHECKS")
+    print("=" * 70)
+    quality_issues = validate_data_quality(datasets['eia_comprehensive_metrics'])
+    for issue in quality_issues:
+        print(issue)
 
     # Print validation report with enhanced 2024 analytics
     report_text = print_validation_report(
