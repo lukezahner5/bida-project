@@ -602,12 +602,51 @@ def fetch_capacity_by_source(api_key: str) -> pd.DataFrame:
     # Process data
     df = pd.DataFrame(all_records)
 
-    if 'period' in df.columns and 'stateid' in df.columns and 'energy-source-code' in df.columns:
+    # Debug: print available columns
+    if df.empty:
+        print("  ✗ No data retrieved!")
+        return pd.DataFrame()
+
+    print(f"  Debug: Available columns: {list(df.columns)}")
+
+    # Check for required columns - be flexible with column names
+    has_period = 'period' in df.columns
+    has_state = 'stateid' in df.columns or 'stateId' in df.columns
+    has_energy_source = 'energy-source-code' in df.columns or 'energySourceCode' in df.columns or 'energy_source_code' in df.columns
+    has_capacity = 'nameplate-capacity-mw' in df.columns or 'nameplateCapacityMW' in df.columns or 'nameplate_capacity_mw' in df.columns
+
+    if has_period and has_state and has_energy_source and has_capacity:
         df['year'] = pd.to_numeric(df['period'].str[:4], errors='coerce')
         df['month'] = pd.to_numeric(df['period'].str[5:7], errors='coerce')
-        df['state'] = df['stateid']
-        df['fuel_type'] = df['energy-source-code'].map(FUEL_TYPES)
-        df['capacity_mw'] = pd.to_numeric(df['nameplate-capacity-mw'], errors='coerce')
+
+        # Handle different state column names
+        if 'stateid' in df.columns:
+            df['state'] = df['stateid']
+        elif 'stateId' in df.columns:
+            df['state'] = df['stateId']
+
+        # Handle different energy source column names
+        if 'energy-source-code' in df.columns:
+            df['fuel_type'] = df['energy-source-code'].map(FUEL_TYPES)
+        elif 'energySourceCode' in df.columns:
+            df['fuel_type'] = df['energySourceCode'].map(FUEL_TYPES)
+        elif 'energy_source_code' in df.columns:
+            df['fuel_type'] = df['energy_source_code'].map(FUEL_TYPES)
+
+        # Handle different capacity column names
+        if 'nameplate-capacity-mw' in df.columns:
+            df['capacity_mw'] = pd.to_numeric(df['nameplate-capacity-mw'], errors='coerce')
+        elif 'nameplateCapacityMW' in df.columns:
+            df['capacity_mw'] = pd.to_numeric(df['nameplateCapacityMW'], errors='coerce')
+        elif 'nameplate_capacity_mw' in df.columns:
+            df['capacity_mw'] = pd.to_numeric(df['nameplate_capacity_mw'], errors='coerce')
+
+        # Remove rows with missing fuel types
+        df = df[df['fuel_type'].notna()]
+
+        if df.empty:
+            print("  ✗ No valid data after processing!")
+            return pd.DataFrame()
 
         # Take December values for each year (end-of-year capacity)
         # If December is missing, take the last available month
@@ -641,6 +680,7 @@ def fetch_capacity_by_source(api_key: str) -> pd.DataFrame:
         return pivot
     else:
         print("  ✗ Unexpected data format!")
+        print(f"  Missing columns - period: {has_period}, state: {has_state}, energy_source: {has_energy_source}, capacity: {has_capacity}")
         return pd.DataFrame()
 
 
