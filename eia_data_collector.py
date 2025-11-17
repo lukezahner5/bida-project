@@ -53,7 +53,12 @@ FUEL_TYPES = {
     "OTH": "other"
 }
 
-# Sector codes
+# Generation sector IDs for electric-power-operational-data endpoint
+# The Electric Power Industry includes all generation sectors combined
+# We only want the total to avoid double-counting individual sectors
+GENERATION_SECTOR_ID = "94"  # Total Electric Power Industry (all sectors combined)
+
+# Sector codes for retail sales (different from generation sectors)
 SECTORS = {
     "RES": "residential",
     "COM": "commercial",
@@ -412,7 +417,8 @@ def fetch_generation_by_source(api_key: str) -> pd.DataFrame:
             data_fields=["generation"],
             facets={
                 "location": [location],
-                "fueltypeid": list(FUEL_TYPES.keys())
+                "fueltypeid": list(FUEL_TYPES.keys()),
+                "sectorid": [GENERATION_SECTOR_ID]  # Filter for Total Electric Power Industry only
             },
             start="2010",
             end="2024",
@@ -1182,13 +1188,23 @@ def validate_data_quality(df: pd.DataFrame) -> List[str]:
     us_2024 = df[(df['state'] == 'US') & (df['year'] == 2024)]
     if not us_2024.empty:
         total_gen = us_2024['total_generation_gwh'].iloc[0]
-        if total_gen < 3_900_000 or total_gen > 4_500_000:
-            issues.append(
-                f"CRITICAL: US 2024 total generation ({total_gen:,.0f} GWh) outside expected range "
-                f"(3.9M - 4.5M GWh). Check unit conversion!"
-            )
+        expected_min = 3_900_000
+        expected_max = 4_500_000
+
+        if total_gen < expected_min or total_gen > expected_max:
+            # Check if it's ~4.4x too high (sector duplication issue)
+            if expected_min * 4 < total_gen < expected_max * 5:
+                issues.append(
+                    f"CRITICAL: US 2024 total generation ({total_gen:,.0f} GWh = {total_gen/1000:,.0f} TWh) "
+                    f"is ~{total_gen/4200000:.1f}x too high. Likely SECTOR DUPLICATION - check sectorid filter!"
+                )
+            else:
+                issues.append(
+                    f"CRITICAL: US 2024 total generation ({total_gen:,.0f} GWh) outside expected range "
+                    f"({expected_min:,.0f} - {expected_max:,.0f} GWh). Check unit conversion or sector filter!"
+                )
         else:
-            issues.append(f"✓ US 2024 total generation: {total_gen:,.0f} GWh (valid)")
+            issues.append(f"✓ US 2024 total generation: {total_gen:,.0f} GWh ({total_gen/1000:,.0f} TWh) [valid]")
 
     # Check 2: Verify renewable percentage doesn't exceed 100%
     if 'renewable_percentage' in df.columns:
@@ -1209,15 +1225,45 @@ def validate_data_quality(df: pd.DataFrame) -> List[str]:
         ca_2024 = states_2024[states_2024['state'] == 'CA']
         if not ca_2024.empty:
             ca_gen = ca_2024['total_generation_gwh'].iloc[0]
-            if ca_gen < 200_000 or ca_gen > 300_000:
-                issues.append(
-                    f"WARNING: California 2024 generation ({ca_gen:,.0f} GWh) outside expected range "
-                    f"(200K - 300K GWh)"
-                )
-            else:
-                issues.append(f"✓ California 2024 generation: {ca_gen:,.0f} GWh (valid)")
+            ca_expected_min = 200_000
+            ca_expected_max = 300_000
 
-    # Check 4: Verify generation >= sales for most states (allows for imports)
+            if ca_gen < ca_expected_min or ca_gen > ca_expected_max:
+                # Check if it's ~4.4x too high (sector duplication)
+                if ca_expected_min * 4 < ca_gen < ca_expected_max * 5:
+                    issues.append(
+                        f"WARNING: California 2024 generation ({ca_gen:,.0f} GWh = {ca_gen/1000:,.0f} TWh) "
+                        f"is ~{ca_gen/200000:.1f}x too high. Likely SECTOR DUPLICATION!"
+                    )
+                else:
+                    issues.append(
+                        f"WARNING: California 2024 generation ({ca_gen:,.0f} GWh) outside expected range "
+                        f"({ca_expected_min:,.0f} - {ca_expected_max:,.0f} GWh)"
+                    )
+            else:
+                issues.append(f"✓ California 2024 generation: {ca_gen:,.0f} GWh ({ca_gen/1000:,.0f} TWh) [valid]")
+
+    # Check 4: Verify generation/sales ratio is reasonable (should be ~1.05-1.10, not 4+)
+    us_recent = df[(df['state'] == 'US') & (df['year'] >= 2020)]
+    if not us_recent.empty and 'total_sales_gwh' in df.columns:
+        for _, row in us_recent.iterrows():
+            if row['total_sales_gwh'] > 0:
+                gen_sales_ratio = row['total_generation_gwh'] / row['total_sales_gwh']
+                year = int(row['year'])
+                if gen_sales_ratio > 2.0:
+                    issues.append(
+                        f"CRITICAL: US {year} generation/sales ratio = {gen_sales_ratio:.2f}x "
+                        f"(expected ~1.05-1.10). SECTOR DUPLICATION detected!"
+                    )
+                elif gen_sales_ratio < 0.95 or gen_sales_ratio > 1.15:
+                    issues.append(
+                        f"WARNING: US {year} generation/sales ratio = {gen_sales_ratio:.2f}x "
+                        f"(expected ~1.05-1.10)"
+                    )
+                else:
+                    issues.append(f"✓ US {year} generation/sales ratio: {gen_sales_ratio:.2f}x [valid]")
+
+    # Check 5: Verify generation >= sales for most states (allows for imports)
     if 'net_generation_balance_gwh' in df.columns:
         recent_data = df[df['year'] >= 2020]
         deficit_states = recent_data[recent_data['net_generation_balance_gwh'] < 0]
