@@ -2,12 +2,25 @@
 """
 EIA Data Collector for Data Center Energy Analysis
 
-This script collects comprehensive electricity data from the EIA API v2
+This script collects comprehensive ELECTRICITY-ONLY data from the EIA API v2
 for analyzing US energy capacity vs. data center demand growth.
+
+IMPORTANT: This queries electricity net generation (~4,200 TWh for US 2024),
+NOT total primary energy (~27,500 TWh which includes transportation fuels,
+heating, conversion losses, etc.)
+
+API Endpoints:
+- /electricity/electric-power-operational-data/ - Form EIA-923 generation data
+- /electricity/retail-sales/ - Form EIA-861 sales data
+- /electricity/facility-fuel/ - Form EIA-860 capacity data
+
+Data Source: Form EIA-923 (Power Plant Operations Report)
+Coverage: ~11,000 utility-scale facilities (≥1 MW capacity)
 
 Author: Data Analysis Team
 Date: 2025-11-12
 API Version: EIA API v2
+API Documentation: https://www.eia.gov/opendata/documentation.php
 """
 
 import requests
@@ -52,11 +65,6 @@ FUEL_TYPES = {
     "SUN": "solar",
     "OTH": "other"
 }
-
-# Generation sector IDs for electric-power-operational-data endpoint
-# The Electric Power Industry includes all generation sectors combined
-# We only want the total to avoid double-counting individual sectors
-GENERATION_SECTOR_ID = "94"  # Total Electric Power Industry (all sectors combined)
 
 # Sector codes for retail sales (different from generation sectors)
 SECTORS = {
@@ -134,7 +142,7 @@ def format_facets_for_api(facets: Dict[str, List[str]]) -> Dict[str, List[str]]:
     """
     Format facets dictionary for EIA API v2 requirements.
 
-    EIA API v2 expects facets as: facets[location][]=VA&facets[location][]=CA
+    EIA API v2 expects facets as: facets[stateid][]=VA&facets[stateid][]=CA
     This function converts our dict format to what requests library needs.
 
     Args:
@@ -167,7 +175,7 @@ def build_api_params(
     Args:
         frequency: Data frequency (annual, monthly, etc.)
         data_fields: List of data fields to retrieve
-        facets: Dictionary of facets (e.g., {"location": ["US"], "fueltypeid": ["COL"]})
+        facets: Dictionary of facets (e.g., {"stateid": ["US"], "fueltypeid": ["COL"]})
         start: Start date
         end: End date
         offset: Pagination offset
@@ -416,9 +424,9 @@ def fetch_generation_by_source(api_key: str) -> pd.DataFrame:
             frequency="annual",
             data_fields=["generation"],
             facets={
-                "location": [location],
-                "fueltypeid": list(FUEL_TYPES.keys()),
-                "sectorid": [GENERATION_SECTOR_ID]  # Filter for Total Electric Power Industry only
+                "stateid": [location],  # Correct facet name per EIA API v2 documentation
+                "fueltypeid": list(FUEL_TYPES.keys())
+                # No sectorid filter - API returns total state generation correctly without it
             },
             start="2010",
             end="2024",
@@ -437,9 +445,9 @@ def fetch_generation_by_source(api_key: str) -> pd.DataFrame:
     df = pd.DataFrame(all_records)
 
     # Create pivot table
-    if 'period' in df.columns and 'location' in df.columns and 'fueltypeid' in df.columns:
+    if 'period' in df.columns and 'stateid' in df.columns and 'fueltypeid' in df.columns:
         df['year'] = pd.to_numeric(df['period'].str[:4], errors='coerce')
-        df['state'] = df['location']
+        df['state'] = df['stateid']  # API returns 'stateid' column
         df['fuel_type'] = df['fueltypeid'].map(FUEL_TYPES)
         # EIA API returns data in "thousand megawatthours" which equals GWh (no conversion needed)
         df['generation_gwh'] = pd.to_numeric(df['generation'], errors='coerce')
