@@ -215,6 +215,18 @@ def prepare_master_dataset(
     df = df.merge(capacity_df, on=['year', 'state'], how='outer')
     df = df.merge(prices_df, on=['year', 'state'], how='outer')
 
+    # Ensure all required generation columns exist and fill missing values with 0
+    required_generation_cols = [
+        'coal_generation_gwh', 'gas_generation_gwh', 'nuclear_generation_gwh',
+        'hydro_generation_gwh', 'wind_generation_gwh', 'solar_generation_gwh',
+        'other_generation_gwh', 'total_generation_gwh'
+    ]
+    for col in required_generation_cols:
+        if col not in df.columns:
+            df[col] = 0
+        else:
+            df[col] = df[col].fillna(0)
+
     # Add state metadata
     df['state_name'] = df['state'].map(STATE_NAMES)
     df['population'] = df['state'].map(STATE_POPULATIONS)
@@ -250,6 +262,24 @@ def prepare_master_dataset(
 
     df['carbon_free_gwh'] = df['renewable_gwh'] + df['nuclear_generation_gwh']
     df['carbon_free_pct'] = (df['carbon_free_gwh'] / df['total_generation_gwh'].replace(0, np.nan)) * 100
+
+    # Validate and fix percentage calculations
+    # 1. Cap renewable_pct at 100% (should never exceed but handle edge cases)
+    df['renewable_pct'] = df['renewable_pct'].clip(upper=100)
+    df['fossil_pct'] = df['fossil_pct'].clip(upper=100)
+    df['carbon_free_pct'] = df['carbon_free_pct'].clip(upper=100)
+
+    # 2. Validate that individual fuel percentages sum to ~100% (±1%)
+    df['total_pct_check'] = (
+        df['coal_pct'].fillna(0) + df['gas_pct'].fillna(0) + df['nuclear_pct'].fillna(0) +
+        df['hydro_pct'].fillna(0) + df['wind_pct'].fillna(0) + df['solar_pct'].fillna(0) +
+        df['other_pct'].fillna(0)
+    )
+
+    # Log warning for states where percentages don't sum to ~100%
+    invalid_pcts = df[(df['total_pct_check'] < 99) | (df['total_pct_check'] > 101)]['total_pct_check']
+    if len(invalid_pcts) > 0:
+        print(f"  ⚠ Warning: {len(invalid_pcts)} records have fuel percentages that don't sum to 100%")
 
     # Per capita metrics
     df['generation_per_capita_mwh'] = (df['total_generation_gwh'] * 1000) / df['population'].replace(0, np.nan)
@@ -642,8 +672,10 @@ def run_scenario_analysis(
 
             total_demand = base_demand_future + datacenter_gwh_adjusted
 
-            # Calculate gap
-            gap_gwh = total_demand - total_supply
+            # Calculate gap (supply - demand)
+            # Positive gap = surplus (supply > demand)
+            # Negative gap = deficit (supply < demand)
+            gap_gwh = total_supply - total_demand
             gap_percentage = (gap_gwh / total_supply) * 100
 
             all_scenario_results.append({
@@ -673,11 +705,12 @@ def run_scenario_analysis(
     print_progress(f"✓ Completed {len(scenarios)} scenarios through 2030")
 
     # Print summary for 2030
-    print_progress("\n  2030 Gap Analysis:")
+    print_progress("\n  2030 Gap Analysis (positive = surplus, negative = deficit):")
     for scenario_name in scenarios.keys():
         scenario_2030 = scenario_df[(scenario_df['scenario'] == scenario_name) & (scenario_df['year'] == 2030)].iloc[0]
         gap_gw = scenario_2030['gap_gwh'] / 8760 * 1000 / 0.9  # Convert back to GW
-        print_progress(f"    {scenario_name}: {gap_gw:.1f} GW gap ({scenario_2030['gap_percentage']:.1f}%)")
+        gap_label = "surplus" if gap_gw > 0 else "deficit"
+        print_progress(f"    {scenario_name}: {abs(gap_gw):.1f} GW {gap_label} ({scenario_2030['gap_percentage']:.1f}%)")
 
     return scenario_df
 

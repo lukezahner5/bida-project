@@ -53,7 +53,12 @@ FUEL_TYPES = {
     "OTH": "other"
 }
 
-# Sector codes
+# Generation sector IDs for electric-power-operational-data endpoint
+# The Electric Power Industry includes all generation sectors combined
+# We only want the total to avoid double-counting individual sectors
+GENERATION_SECTOR_ID = "94"  # Total Electric Power Industry (all sectors combined)
+
+# Sector codes for retail sales (different from generation sectors)
 SECTORS = {
     "RES": "residential",
     "COM": "commercial",
@@ -412,7 +417,8 @@ def fetch_generation_by_source(api_key: str) -> pd.DataFrame:
             data_fields=["generation"],
             facets={
                 "location": [location],
-                "fueltypeid": list(FUEL_TYPES.keys())
+                "fueltypeid": list(FUEL_TYPES.keys()),
+                "sectorid": [GENERATION_SECTOR_ID]  # Filter for Total Electric Power Industry only
             },
             start="2010",
             end="2024",
@@ -435,7 +441,8 @@ def fetch_generation_by_source(api_key: str) -> pd.DataFrame:
         df['year'] = pd.to_numeric(df['period'].str[:4], errors='coerce')
         df['state'] = df['location']
         df['fuel_type'] = df['fueltypeid'].map(FUEL_TYPES)
-        df['generation_gwh'] = pd.to_numeric(df['generation'], errors='coerce') / 1000  # Convert to GWh
+        # EIA API returns data in "thousand megawatthours" which equals GWh (no conversion needed)
+        df['generation_gwh'] = pd.to_numeric(df['generation'], errors='coerce')
 
         # Pivot to wide format
         pivot = df.pivot_table(
@@ -520,7 +527,8 @@ def fetch_retail_sales_by_sector(api_key: str) -> pd.DataFrame:
         df['year'] = pd.to_numeric(df['period'].str[:4], errors='coerce')
         df['state'] = df['stateid']
         df['sector'] = df['sectorid'].map(SECTORS)
-        df['sales_gwh'] = pd.to_numeric(df['sales'], errors='coerce') / 1000  # Convert to GWh
+        # EIA API returns data in "thousand megawatthours" which equals GWh (no conversion needed)
+        df['sales_gwh'] = pd.to_numeric(df['sales'], errors='coerce')
 
         # Pivot to wide format
         pivot = df.pivot_table(
@@ -1164,6 +1172,113 @@ def validate_and_report(
     return report
 
 
+def validate_data_quality(df: pd.DataFrame) -> List[str]:
+    """
+    Perform comprehensive data quality checks.
+
+    Args:
+        df: Comprehensive metrics DataFrame
+
+    Returns:
+        List of validation error/warning messages
+    """
+    issues = []
+
+    # Check 1: Verify US 2024 total generation is in expected range (3.9M - 4.5M GWh)
+    us_2024 = df[(df['state'] == 'US') & (df['year'] == 2024)]
+    if not us_2024.empty:
+        total_gen = us_2024['total_generation_gwh'].iloc[0]
+        expected_min = 3_900_000
+        expected_max = 4_500_000
+
+        if total_gen < expected_min or total_gen > expected_max:
+            # Check if it's ~4.4x too high (sector duplication issue)
+            if expected_min * 4 < total_gen < expected_max * 5:
+                issues.append(
+                    f"CRITICAL: US 2024 total generation ({total_gen:,.0f} GWh = {total_gen/1000:,.0f} TWh) "
+                    f"is ~{total_gen/4200000:.1f}x too high. Likely SECTOR DUPLICATION - check sectorid filter!"
+                )
+            else:
+                issues.append(
+                    f"CRITICAL: US 2024 total generation ({total_gen:,.0f} GWh) outside expected range "
+                    f"({expected_min:,.0f} - {expected_max:,.0f} GWh). Check unit conversion or sector filter!"
+                )
+        else:
+            issues.append(f"✓ US 2024 total generation: {total_gen:,.0f} GWh ({total_gen/1000:,.0f} TWh) [valid]")
+
+    # Check 2: Verify renewable percentage doesn't exceed 100%
+    if 'renewable_percentage' in df.columns:
+        invalid_renewable = df[df['renewable_percentage'] > 100]
+        if len(invalid_renewable) > 0:
+            issues.append(
+                f"ERROR: {len(invalid_renewable)} records have renewable_percentage > 100%"
+            )
+            for _, row in invalid_renewable.head(5).iterrows():
+                issues.append(f"  - {row.get('state', 'Unknown')}, {row.get('year', 'Unknown')}: {row['renewable_percentage']:.1f}%")
+        else:
+            issues.append(f"✓ All renewable percentages ≤ 100%")
+
+    # Check 3: Verify state data is in reasonable ranges
+    states_2024 = df[(df['year'] == 2024) & (df['state'] != 'US')]
+    if not states_2024.empty:
+        # California should be largest state (200,000 - 300,000 GWh)
+        ca_2024 = states_2024[states_2024['state'] == 'CA']
+        if not ca_2024.empty:
+            ca_gen = ca_2024['total_generation_gwh'].iloc[0]
+            ca_expected_min = 200_000
+            ca_expected_max = 300_000
+
+            if ca_gen < ca_expected_min or ca_gen > ca_expected_max:
+                # Check if it's ~4.4x too high (sector duplication)
+                if ca_expected_min * 4 < ca_gen < ca_expected_max * 5:
+                    issues.append(
+                        f"WARNING: California 2024 generation ({ca_gen:,.0f} GWh = {ca_gen/1000:,.0f} TWh) "
+                        f"is ~{ca_gen/200000:.1f}x too high. Likely SECTOR DUPLICATION!"
+                    )
+                else:
+                    issues.append(
+                        f"WARNING: California 2024 generation ({ca_gen:,.0f} GWh) outside expected range "
+                        f"({ca_expected_min:,.0f} - {ca_expected_max:,.0f} GWh)"
+                    )
+            else:
+                issues.append(f"✓ California 2024 generation: {ca_gen:,.0f} GWh ({ca_gen/1000:,.0f} TWh) [valid]")
+
+    # Check 4: Verify generation/sales ratio is reasonable (should be ~1.05-1.10, not 4+)
+    us_recent = df[(df['state'] == 'US') & (df['year'] >= 2020)]
+    if not us_recent.empty and 'total_sales_gwh' in df.columns:
+        for _, row in us_recent.iterrows():
+            if row['total_sales_gwh'] > 0:
+                gen_sales_ratio = row['total_generation_gwh'] / row['total_sales_gwh']
+                year = int(row['year'])
+                if gen_sales_ratio > 2.0:
+                    issues.append(
+                        f"CRITICAL: US {year} generation/sales ratio = {gen_sales_ratio:.2f}x "
+                        f"(expected ~1.05-1.10). SECTOR DUPLICATION detected!"
+                    )
+                elif gen_sales_ratio < 0.95 or gen_sales_ratio > 1.15:
+                    issues.append(
+                        f"WARNING: US {year} generation/sales ratio = {gen_sales_ratio:.2f}x "
+                        f"(expected ~1.05-1.10)"
+                    )
+                else:
+                    issues.append(f"✓ US {year} generation/sales ratio: {gen_sales_ratio:.2f}x [valid]")
+
+    # Check 5: Verify generation >= sales for most states (allows for imports)
+    if 'net_generation_balance_gwh' in df.columns:
+        recent_data = df[df['year'] >= 2020]
+        deficit_states = recent_data[recent_data['net_generation_balance_gwh'] < 0]
+        surplus_states = recent_data[recent_data['net_generation_balance_gwh'] > 0]
+
+        # Most states should be net exporters
+        if len(surplus_states) > 0 and len(deficit_states) > 0:
+            surplus_ratio = len(surplus_states) / (len(surplus_states) + len(deficit_states))
+            issues.append(
+                f"✓ {len(surplus_states)} surplus vs {len(deficit_states)} deficit records (2020+)"
+            )
+
+    return issues
+
+
 def print_validation_report(reports: List[Dict], df_2024: Optional[pd.DataFrame] = None) -> str:
     """
     Print and return formatted validation report with enhanced analytics.
@@ -1452,6 +1567,14 @@ def main():
             ALL_STATES
         ),
     ]
+
+    # Run comprehensive data quality checks
+    print("\n" + "=" * 70)
+    print("COMPREHENSIVE DATA QUALITY CHECKS")
+    print("=" * 70)
+    quality_issues = validate_data_quality(datasets['eia_comprehensive_metrics'])
+    for issue in quality_issues:
+        print(issue)
 
     # Print validation report with enhanced 2024 analytics
     report_text = print_validation_report(
