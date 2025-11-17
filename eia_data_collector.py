@@ -62,6 +62,47 @@ SECTORS = {
     "ALL": "total"
 }
 
+# State populations (2024 estimates) for per capita calculations
+STATE_POPULATIONS = {
+    'AL': 5108468, 'AK': 733406, 'AZ': 7431344, 'AR': 3067732,
+    'CA': 38965193, 'CO': 5877610, 'CT': 3617176, 'DE': 1031890,
+    'FL': 22610726, 'GA': 11029227, 'HI': 1435138, 'ID': 1964726,
+    'IL': 12549689, 'IN': 6862199, 'IA': 3207004, 'KS': 2940546,
+    'KY': 4526154, 'LA': 4573749, 'ME': 1395722, 'MD': 6164660,
+    'MA': 6981974, 'MI': 10037261, 'MN': 5737915, 'MS': 2939690,
+    'MO': 6196156, 'MT': 1122867, 'NE': 1978379, 'NV': 3194176,
+    'NH': 1402054, 'NJ': 9290841, 'NM': 2114371, 'NY': 19571216,
+    'NC': 10835491, 'ND': 783926, 'OH': 11785935, 'OK': 4053824,
+    'OR': 4233358, 'PA': 12961683, 'RI': 1095962, 'SC': 5373555,
+    'SD': 919318, 'TN': 7126489, 'TX': 30503301, 'UT': 3417734,
+    'VT': 647464, 'VA': 8715698, 'WA': 7812880, 'WV': 1770071,
+    'WI': 5910955, 'WY': 584057, 'DC': 678972
+}
+
+# State regions for regional analysis
+STATE_REGIONS = {
+    # Northeast
+    'CT': 'Northeast', 'ME': 'Northeast', 'MA': 'Northeast', 'NH': 'Northeast',
+    'NJ': 'Northeast', 'NY': 'Northeast', 'PA': 'Northeast', 'RI': 'Northeast',
+    'VT': 'Northeast',
+
+    # Midwest
+    'IL': 'Midwest', 'IN': 'Midwest', 'IA': 'Midwest', 'KS': 'Midwest',
+    'MI': 'Midwest', 'MN': 'Midwest', 'MO': 'Midwest', 'NE': 'Midwest',
+    'ND': 'Midwest', 'OH': 'Midwest', 'SD': 'Midwest', 'WI': 'Midwest',
+
+    # South
+    'AL': 'South', 'AR': 'South', 'DE': 'South', 'DC': 'South', 'FL': 'South',
+    'GA': 'South', 'KY': 'South', 'LA': 'South', 'MD': 'South', 'MS': 'South',
+    'NC': 'South', 'OK': 'South', 'SC': 'South', 'TN': 'South', 'TX': 'South',
+    'VA': 'South', 'WV': 'South',
+
+    # West
+    'AK': 'West', 'AZ': 'West', 'CA': 'West', 'CO': 'West', 'HI': 'West',
+    'ID': 'West', 'MT': 'West', 'NV': 'West', 'NM': 'West', 'OR': 'West',
+    'UT': 'West', 'WA': 'West', 'WY': 'West'
+}
+
 
 # ============================================================================
 # UTILITY FUNCTIONS
@@ -586,130 +627,6 @@ def fetch_capacity_by_source(api_key: str) -> pd.DataFrame:
         return pd.DataFrame()
 
 
-def fetch_seds_state_energy(api_key: str) -> pd.DataFrame:
-    """
-    Fetch State Energy Data System (SEDS) data for all 50 states (2010-2023).
-
-    Args:
-        api_key: EIA API key
-
-    Returns:
-        DataFrame: State energy consumption and production data
-    """
-    print("\n" + "=" * 70)
-    print("4. Fetching State Energy Data System (SEDS) - All 50 States (2010-2023)")
-    print("=" * 70)
-
-    start_time = time.time()
-    endpoint = "/seds/data/"
-
-    # SEDS MSN codes
-    msn_codes = ["TETCB", "TEPRB", "ESTCB"]
-
-    all_records = []
-
-    print(f"  Fetching data for all 50 states...")
-
-    # SEDS requires seriesId facet with format: SEDS.{MSN}.{STATE}.A
-    # We'll fetch all combinations of MSN codes and states
-    for msn in msn_codes:
-        print(f"    Fetching {msn}...")
-
-        # Build series IDs for all states for this MSN code
-        series_ids = [f"SEDS.{msn}.{state}.A" for state in ALL_STATES]
-
-        # SEDS API has a limit on facet values, so we may need to batch
-        # Fetch in batches of 50 series IDs at a time
-        batch_size = 50
-        for i in range(0, len(series_ids), batch_size):
-            batch = series_ids[i:i+batch_size]
-
-            params = build_api_params(
-                frequency="annual",
-                data_fields=["value"],
-                facets={
-                    "seriesId": batch  # Note: SEDS uses seriesId, not stateId or msn
-                },
-                start="2010",
-                end="2023",
-                sort_by="period"
-            )
-
-            data = fetch_paginated_data(endpoint, api_key, params)
-            all_records.extend(data)
-            time.sleep(0.5)
-
-    if not all_records:
-        print("  ✗ No data retrieved!")
-        return pd.DataFrame()
-
-    # Process data
-    df = pd.DataFrame(all_records)
-
-    if 'period' in df.columns and 'seriesId' in df.columns:
-        df['year'] = pd.to_numeric(df['period'].str[:4], errors='coerce')
-        df['value_btu'] = pd.to_numeric(df['value'], errors='coerce')
-
-        # Parse seriesId to extract MSN and state
-        # Format is: SEDS.{MSN}.{STATE}.A
-        df['series_parts'] = df['seriesId'].str.split('.')
-        df['msn'] = df['series_parts'].str[1]  # Extract MSN (e.g., TETCB)
-        df['state'] = df['series_parts'].str[2]  # Extract state (e.g., CA)
-
-        # Map MSN codes to readable names
-        msn_map = {
-            "TETCB": "total_energy_consumption_btu",
-            "TEPRB": "total_energy_production_btu",
-            "ESTCB": "total_electricity_consumption_btu"
-        }
-        df['metric'] = df['msn'].map(msn_map)
-
-        # Pivot to wide format
-        pivot = df.pivot_table(
-            index=['year', 'state'],
-            columns='metric',
-            values='value_btu',
-            aggfunc='sum'
-        ).reset_index()
-
-        # Add state names (simplified mapping)
-        state_names = {
-            "AL": "Alabama", "AK": "Alaska", "AZ": "Arizona", "AR": "Arkansas",
-            "CA": "California", "CO": "Colorado", "CT": "Connecticut", "DE": "Delaware",
-            "FL": "Florida", "GA": "Georgia", "HI": "Hawaii", "ID": "Idaho",
-            "IL": "Illinois", "IN": "Indiana", "IA": "Iowa", "KS": "Kansas",
-            "KY": "Kentucky", "LA": "Louisiana", "ME": "Maine", "MD": "Maryland",
-            "MA": "Massachusetts", "MI": "Michigan", "MN": "Minnesota", "MS": "Mississippi",
-            "MO": "Missouri", "MT": "Montana", "NE": "Nebraska", "NV": "Nevada",
-            "NH": "New Hampshire", "NJ": "New Jersey", "NM": "New Mexico", "NY": "New York",
-            "NC": "North Carolina", "ND": "North Dakota", "OH": "Ohio", "OK": "Oklahoma",
-            "OR": "Oregon", "PA": "Pennsylvania", "RI": "Rhode Island", "SC": "South Carolina",
-            "SD": "South Dakota", "TN": "Tennessee", "TX": "Texas", "UT": "Utah",
-            "VT": "Vermont", "VA": "Virginia", "WA": "Washington", "WV": "West Virginia",
-            "WI": "Wisconsin", "WY": "Wyoming"
-        }
-        pivot['state_name'] = pivot['state'].map(state_names)
-
-        # Reorder columns
-        cols = ['year', 'state', 'state_name', 'total_energy_consumption_btu',
-                'total_energy_production_btu', 'total_electricity_consumption_btu']
-        pivot = pivot[[col for col in cols if col in pivot.columns]]
-
-        # Fill NaN with 0
-        pivot = pivot.fillna(0)
-
-        # Sort
-        pivot = pivot.sort_values(['year', 'state']).reset_index(drop=True)
-
-        elapsed = time.time() - start_time
-        print(f"  ✓ Retrieved {len(pivot)} records in {elapsed:.1f} seconds")
-
-        return pivot
-    else:
-        print("  ✗ Unexpected data format!")
-        return pd.DataFrame()
-
-
 def fetch_electricity_prices(api_key: str) -> pd.DataFrame:
     """
     Fetch electricity prices by state (2010-2024).
@@ -721,7 +638,7 @@ def fetch_electricity_prices(api_key: str) -> pd.DataFrame:
         DataFrame: Average electricity prices by year and state
     """
     print("\n" + "=" * 70)
-    print("5. Fetching Electricity Prices by State (2010-2024)")
+    print("4. Fetching Electricity Prices by State (2010-2024)")
     print("=" * 70)
 
     start_time = time.time()
@@ -774,6 +691,84 @@ def fetch_electricity_prices(api_key: str) -> pd.DataFrame:
     else:
         print("  ✗ Unexpected data format!")
         return pd.DataFrame()
+
+
+def calculate_derived_metrics(
+    generation_df: pd.DataFrame,
+    sales_df: pd.DataFrame,
+    capacity_df: pd.DataFrame
+) -> pd.DataFrame:
+    """
+    Calculate derived metrics by merging and computing additional fields.
+
+    Args:
+        generation_df: Generation by source data
+        sales_df: Retail sales by sector data
+        capacity_df: Capacity by source data
+
+    Returns:
+        DataFrame: Comprehensive metrics with derived calculations
+    """
+    print("\n" + "=" * 70)
+    print("Calculating Derived Metrics...")
+    print("=" * 70)
+
+    # Merge all datasets on year and state
+    df = generation_df.merge(sales_df, on=['year', 'state'], how='outer')
+    df = df.merge(capacity_df, on=['year', 'state'], how='outer')
+
+    # Add population and region data
+    df['population'] = df['state'].map(STATE_POPULATIONS)
+    df['region'] = df['state'].map(STATE_REGIONS)
+
+    # Calculate derived metrics
+    print("  Computing capacity metrics...")
+
+    # 1. Net Generation Balance (GWh)
+    df['net_generation_balance_gwh'] = df['total_generation_gwh'] - df['total_sales_gwh']
+
+    # 2. Capacity Surplus Percentage
+    df['capacity_surplus_pct'] = (df['net_generation_balance_gwh'] / df['total_generation_gwh'].replace(0, np.nan)) * 100
+
+    # 3. Generation Per Capita (MWh per person)
+    # Convert GWh to MWh (multiply by 1000)
+    df['generation_per_capita_mwh'] = (df['total_generation_gwh'] * 1000) / df['population'].replace(0, np.nan)
+
+    # 4. Consumption Per Capita (MWh per person)
+    df['consumption_per_capita_mwh'] = (df['total_sales_gwh'] * 1000) / df['population'].replace(0, np.nan)
+
+    # 5. Renewable Percentage
+    renewable_generation = (
+        df.get('solar_generation_gwh', 0) +
+        df.get('wind_generation_gwh', 0) +
+        df.get('hydro_generation_gwh', 0)
+    )
+    df['renewable_percentage'] = (renewable_generation / df['total_generation_gwh'].replace(0, np.nan)) * 100
+
+    # 6. Capacity Utilization (%)
+    # Total possible generation = capacity (MW) × 8760 hours/year
+    # Convert MW to GW, then multiply by 8760 to get GWh
+    total_possible_gwh = (df['total_capacity_mw'] / 1000) * 8760
+    df['capacity_utilization_pct'] = (df['total_generation_gwh'] / total_possible_gwh.replace(0, np.nan)) * 100
+
+    # 7. Available Capacity (MW)
+    # Available capacity = Total capacity × (1 - utilization rate as decimal)
+    utilization_decimal = df['capacity_utilization_pct'] / 100
+    df['available_capacity_mw'] = df['total_capacity_mw'] * (1 - utilization_decimal)
+
+    # Fill infinite values with NaN
+    df = df.replace([np.inf, -np.inf], np.nan)
+
+    # Sort by year and state
+    df = df.sort_values(['year', 'state']).reset_index(drop=True)
+
+    print(f"  ✓ Calculated derived metrics for {len(df)} records")
+    print(f"  ✓ Added fields: population, region, net_generation_balance_gwh,")
+    print(f"     capacity_surplus_pct, generation_per_capita_mwh,")
+    print(f"     consumption_per_capita_mwh, renewable_percentage,")
+    print(f"     capacity_utilization_pct, available_capacity_mw")
+
+    return df
 
 
 # ============================================================================
@@ -1023,11 +1018,15 @@ def main():
     # 3. Capacity by source
     datasets['eia_capacity_by_source'] = fetch_capacity_by_source(api_key)
 
-    # 4. SEDS state energy
-    datasets['eia_state_energy_seds'] = fetch_seds_state_energy(api_key)
-
-    # 5. Electricity prices
+    # 4. Electricity prices
     datasets['eia_electricity_prices'] = fetch_electricity_prices(api_key)
+
+    # 5. Calculate comprehensive metrics with derived fields
+    datasets['eia_comprehensive_metrics'] = calculate_derived_metrics(
+        datasets['eia_generation_by_source'],
+        datasets['eia_retail_sales_by_sector'],
+        datasets['eia_capacity_by_source']
+    )
 
     total_time = time.time() - collection_start
 
@@ -1056,16 +1055,16 @@ def main():
             ["US"] + ALL_STATES
         ),
         validate_and_report(
-            datasets['eia_state_energy_seds'],
-            'State Energy Data System (SEDS)',
-            (2010, 2023),
-            ALL_STATES
-        ),
-        validate_and_report(
             datasets['eia_electricity_prices'],
             'Electricity Prices by State',
             (2010, 2024),
             ALL_STATES
+        ),
+        validate_and_report(
+            datasets['eia_comprehensive_metrics'],
+            'Comprehensive Metrics with Derived Fields',
+            (2010, 2024),
+            ["US"] + ALL_STATES
         ),
     ]
 
