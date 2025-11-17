@@ -40,6 +40,8 @@ eia_retail_sales_by_sector.csv
 eia_capacity_by_source.csv
 eia_state_energy_seds.csv
 eia_electricity_prices.csv
+eia_comprehensive_metrics.csv
+state_capacity_analysis_2024.csv
 eia_master_data.xlsx
 data_quality_report.txt
 
