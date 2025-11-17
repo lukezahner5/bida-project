@@ -8,8 +8,8 @@ This script collects 5 key datasets spanning 2010-2024:
 1. **Annual Electricity Generation by Source** - Power generation broken down by fuel type
 2. **Retail Sales by Sector** - Electricity consumption across different sectors
 3. **Generation Capacity by Source** - Installed power generation capacity
-4. **State Energy Data (SEDS)** - Comprehensive state-level energy statistics for all 50 states
-5. **Electricity Prices** - Average retail electricity prices by state
+4. **Electricity Prices** - Average retail electricity prices by state
+5. **Comprehensive Metrics** - Merged dataset with derived metrics including per capita calculations, renewable percentages, capacity utilization, and regional classifications
 
 ## Quick Start
 
@@ -42,8 +42,8 @@ The script creates the following files:
 - `eia_generation_by_source.csv` - Annual generation by fuel type
 - `eia_retail_sales_by_sector.csv` - Sales by customer sector
 - `eia_capacity_by_source.csv` - Installed capacity by fuel type
-- `eia_state_energy_seds.csv` - State energy consumption and production
 - `eia_electricity_prices.csv` - Average retail prices by state
+- `eia_comprehensive_metrics.csv` - **Master dataset** with all metrics and derived calculations
 
 ### Excel File:
 - `eia_master_data.xlsx` - All datasets in separate sheets with metadata
@@ -113,24 +113,7 @@ Installed electricity generation capacity by fuel type (2015-2024)
 
 **Note:** 1,000 MW = 1 GW (gigawatt)
 
-### 4. eia_state_energy_seds.csv
-
-State Energy Data System - comprehensive state energy statistics (2010-2023)
-
-| Column | Type | Description | Units |
-|--------|------|-------------|-------|
-| `year` | int | Calendar year | - |
-| `state` | str | State code | - |
-| `state_name` | str | Full state name | - |
-| `total_energy_consumption_btu` | float | Total energy consumed | Billion BTU |
-| `total_energy_production_btu` | float | Total energy produced | Billion BTU |
-| `total_electricity_consumption_btu` | float | Electricity consumed | Billion BTU |
-
-**Coverage:** All 50 US states
-
-**Note:** BTU = British Thermal Unit (energy measurement)
-
-### 5. eia_electricity_prices.csv
+### 4. eia_electricity_prices.csv
 
 Average retail electricity prices by state (2010-2024)
 
@@ -143,6 +126,63 @@ Average retail electricity prices by state (2010-2024)
 **Coverage:** All 50 US states
 
 **Note:** Prices are sector-averaged across all customer types
+
+### 5. eia_comprehensive_metrics.csv
+
+**Master dataset** combining all data with derived calculations (2010-2024)
+
+This is the primary analysis dataset that merges generation, sales, and capacity data with calculated metrics.
+
+| Column | Type | Description | Units |
+|--------|------|-------------|-------|
+| **Core Identifiers** | | | |
+| `year` | int | Calendar year | - |
+| `state` | str | State code | - |
+| `population` | int | State population (2024 estimate) | People |
+| `region` | str | US Census Region | Northeast/Midwest/South/West |
+| **Generation Metrics** (from dataset #1) | | | |
+| `coal_generation_gwh` | float | Coal generation | GWh |
+| `gas_generation_gwh` | float | Natural gas generation | GWh |
+| `nuclear_generation_gwh` | float | Nuclear generation | GWh |
+| `hydro_generation_gwh` | float | Hydroelectric generation | GWh |
+| `wind_generation_gwh` | float | Wind generation | GWh |
+| `solar_generation_gwh` | float | Solar generation | GWh |
+| `other_generation_gwh` | float | Other sources | GWh |
+| `total_generation_gwh` | float | Total generation | GWh |
+| **Sales Metrics** (from dataset #2) | | | |
+| `residential_sales_gwh` | float | Residential sector sales | GWh |
+| `commercial_sales_gwh` | float | Commercial sector (incl. data centers) | GWh |
+| `industrial_sales_gwh` | float | Industrial sector sales | GWh |
+| `transportation_sales_gwh` | float | Transportation sector sales | GWh |
+| `total_sales_gwh` | float | Total sales/consumption | GWh |
+| **Capacity Metrics** (from dataset #3) | | | |
+| `coal_capacity_mw` | float | Coal capacity | MW |
+| `gas_capacity_mw` | float | Natural gas capacity | MW |
+| `nuclear_capacity_mw` | float | Nuclear capacity | MW |
+| `hydro_capacity_mw` | float | Hydroelectric capacity | MW |
+| `wind_capacity_mw` | float | Wind capacity | MW |
+| `solar_capacity_mw` | float | Solar capacity | MW |
+| `other_capacity_mw` | float | Other sources capacity | MW |
+| `total_capacity_mw` | float | Total installed capacity | MW |
+| **Derived Metrics** (calculated) | | | |
+| `net_generation_balance_gwh` | float | Generation minus sales (surplus/deficit) | GWh |
+| `capacity_surplus_pct` | float | Net balance as % of generation | % |
+| `generation_per_capita_mwh` | float | Generation per person | MWh/person |
+| `consumption_per_capita_mwh` | float | Consumption per person | MWh/person |
+| `renewable_percentage` | float | Renewables (solar+wind+hydro) / total | % |
+| `capacity_utilization_pct` | float | Actual gen / max possible (8760h × capacity) | % |
+| `available_capacity_mw` | float | Unused capacity | MW |
+
+**Coverage:** US total + all 50 US states
+
+**Key Derived Metrics Explained:**
+
+- **Net Generation Balance**: Positive = net exporter (produces more than consumed), Negative = net importer
+- **Capacity Surplus**: How much excess generation a state has relative to its production
+- **Per Capita Metrics**: Enables fair comparison between states of different sizes
+- **Renewable Percentage**: Share of electricity from clean sources
+- **Capacity Utilization**: How efficiently existing capacity is being used (lower = more available capacity)
+- **Available Capacity**: Unused generation capacity that could serve new demand like data centers
 
 ## Features
 
@@ -170,9 +210,9 @@ Average retail electricity prices by state (2010-2024)
 ### Known Limitations
 
 1. **Capacity Data:** Only available from 2015 onwards (not 2010)
-2. **SEDS Data:** Typically lags by 1-2 years (latest is usually 2023)
-3. **Missing Values:** Some states may have incomplete data for certain years
-4. **State Coverage:** Not all datasets cover all 50 states (see individual dataset descriptions)
+2. **Missing Values:** Some states may have incomplete data for certain years
+3. **Population Data:** Uses 2024 estimates applied to all years (for per capita calculations)
+4. **Derived Metrics:** Calculated fields may show NaN for states/years with missing source data
 
 ### Data Update Frequency
 
