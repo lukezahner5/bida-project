@@ -142,7 +142,10 @@ def format_facets_for_api(facets: Dict[str, List[str]]) -> Dict[str, List[str]]:
     """
     Format facets dictionary for EIA API v2 requirements.
 
-    EIA API v2 expects facets as: facets[stateid][]=VA&facets[stateid][]=CA
+    EIA API v2 expects facets with endpoint-specific names:
+    - electric-power-operational-data: facets[location][]=US
+    - retail-sales: facets[stateid][]=CA
+    - facility-fuel: facets[stateid][]=TX
     This function converts our dict format to what requests library needs.
 
     Args:
@@ -175,7 +178,9 @@ def build_api_params(
     Args:
         frequency: Data frequency (annual, monthly, etc.)
         data_fields: List of data fields to retrieve
-        facets: Dictionary of facets (e.g., {"stateid": ["US"], "fueltypeid": ["COL"]})
+        facets: Dictionary of facets - use endpoint-specific names:
+                electric-power-operational-data: {"location": ["US"], "fueltypeid": ["COL"]}
+                retail-sales: {"stateid": ["US"], "sectorid": ["ALL"]}
         start: Start date
         end: End date
         offset: Pagination offset
@@ -424,7 +429,7 @@ def fetch_generation_by_source(api_key: str) -> pd.DataFrame:
             frequency="annual",
             data_fields=["generation"],
             facets={
-                "stateid": [location],  # Correct facet name per EIA API v2 documentation
+                "location": [location],  # electric-power-operational-data uses 'location', not 'stateid'
                 "fueltypeid": list(FUEL_TYPES.keys())
                 # No sectorid filter - API returns total state generation correctly without it
             },
@@ -445,9 +450,9 @@ def fetch_generation_by_source(api_key: str) -> pd.DataFrame:
     df = pd.DataFrame(all_records)
 
     # Create pivot table
-    if 'period' in df.columns and 'stateid' in df.columns and 'fueltypeid' in df.columns:
+    if 'period' in df.columns and 'location' in df.columns and 'fueltypeid' in df.columns:
         df['year'] = pd.to_numeric(df['period'].str[:4], errors='coerce')
-        df['state'] = df['stateid']  # API returns 'stateid' column
+        df['state'] = df['location']  # electric-power-operational-data returns 'location' column
         df['fuel_type'] = df['fueltypeid'].map(FUEL_TYPES)
         # EIA API returns data in "thousand megawatthours" which equals GWh (no conversion needed)
         df['generation_gwh'] = pd.to_numeric(df['generation'], errors='coerce')
