@@ -336,12 +336,13 @@ def fetch_generation_by_source(api_key: str) -> pd.DataFrame:
     print("\n" + "=" * 70)
     print("1. Fetching Annual Electricity Generation by Source (2010-2024)")
     print("=" * 70)
+    print("   Collecting data for US total + all 50 states")
 
     start_time = time.time()
     endpoint = "/electricity/electric-power-operational-data/data/"
 
-    # Include US total plus priority states
-    locations = ["US"] + PRIORITY_STATES
+    # Include US total plus all 50 states
+    locations = ["US"] + ALL_STATES
 
     all_records = []
 
@@ -422,11 +423,12 @@ def fetch_retail_sales_by_sector(api_key: str) -> pd.DataFrame:
     print("\n" + "=" * 70)
     print("2. Fetching Total Electricity Retail Sales by Sector (2010-2024)")
     print("=" * 70)
+    print("   Collecting data for US total + all 50 states")
 
     start_time = time.time()
     endpoint = "/electricity/retail-sales/data/"
 
-    locations = ["US"] + PRIORITY_STATES
+    locations = ["US"] + ALL_STATES
 
     all_records = []
 
@@ -505,12 +507,13 @@ def fetch_capacity_by_source(api_key: str) -> pd.DataFrame:
     print("\n" + "=" * 70)
     print("3. Fetching Electricity Generation Capacity by Source (2015-2024)")
     print("=" * 70)
+    print("   Collecting data for US total + all 50 states")
     print("   (Note: Fetching monthly data and aggregating to annual)")
 
     start_time = time.time()
     endpoint = "/electricity/operating-generator-capacity/data/"
 
-    locations = ["US"] + PRIORITY_STATES
+    locations = ["US"] + ALL_STATES
 
     all_records = []
 
@@ -1038,19 +1041,19 @@ def main():
             datasets['eia_generation_by_source'],
             'Annual Electricity Generation by Source',
             (2010, 2024),
-            ["US"] + PRIORITY_STATES
+            ["US"] + ALL_STATES
         ),
         validate_and_report(
             datasets['eia_retail_sales_by_sector'],
             'Retail Sales by Sector',
             (2010, 2024),
-            ["US"] + PRIORITY_STATES
+            ["US"] + ALL_STATES
         ),
         validate_and_report(
             datasets['eia_capacity_by_source'],
             'Generation Capacity by Source',
             (2015, 2024),
-            ["US"] + PRIORITY_STATES
+            ["US"] + ALL_STATES
         ),
         validate_and_report(
             datasets['eia_state_energy_seds'],
