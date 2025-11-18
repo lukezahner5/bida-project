@@ -2,10 +2,11 @@
 """
 EIA Electricity Data Collector - UTILITY-SCALE ELECTRICITY ONLY
 
-Uses: electricity/electric-power-operational-data
-Filters: sector=electric_power (this is critical for electricity-only data)
+Uses: electricity/eia923/generation (EIA-923 generation table)
+This contains actual net_generation values in MWh
 
-This excludes total energy (transportation, heating, etc.)
+EIA-923 covers utility-scale electricity generation from plants with
+capacity >= 1 MW.
 """
 
 import requests
@@ -16,7 +17,7 @@ from pathlib import Path
 
 # Configuration
 BASE_URL = "https://api.eia.gov/v2"
-ENDPOINT = "/electricity/electric-power-operational-data/data/"
+ENDPOINT = "/electricity/eia923/generation/data/"
 
 # Fuel type mappings (valid codes for electric-power-operational-data)
 FUEL_TYPES = {
@@ -45,10 +46,10 @@ ALL_STATES = [
 def get_api_key() -> str:
     """Get API key from user."""
     print("=" * 70)
-    print("EIA Electricity Collector - UTILITY-SCALE ONLY")
+    print("EIA-923 Electricity Generation Collector")
     print("=" * 70)
-    print("\nDataset: electricity/electric-power-operational-data")
-    print("Filter: sector=electric_power (excludes total energy)")
+    print("\nDataset: electricity/eia923/generation")
+    print("Source: EIA-923 generation table (utility-scale plants >= 1 MW)")
     print("\nRegister for free API key at: https://www.eia.gov/opendata/register.php\n")
 
     api_key = input("Enter your EIA API key: ").strip()
@@ -151,43 +152,44 @@ def process_generation_data(all_records, filter_states=None):
         for key, value in all_records[0].items():
             print(f"  {key}: {value}")
 
-    # The response from electric-power-operational-data should have:
+    # The response from eia923/generation should have:
     # - period (year)
-    # - state
-    # - fuel_type (NOT fueltype or fuel_type_code)
-    # - sector
-    # - generation (value in MWh)
+    # - plant_state (state code)
+    # - fuel_type or fuel_type_code
+    # - sector or sector_id
+    # - net_generation (value in MWh) - THIS IS THE KEY FIELD
 
     # Map actual column names to expected names
-    # The API uses different column names than documented
     column_mapping = {
-        'location': 'state',
+        'plant_state': 'state',
+        'plantState': 'state',
+        'state-name': 'state',
+        'sector_id': 'sector',
         'sectorid': 'sector',
-        'fueltypeid': 'fuel_type'
+        'fuel_type_code': 'fuel_type',
+        'fueltypeid': 'fuel_type',
+        'fuelTypeCode': 'fuel_type',
+        'net_generation': 'generation_mwh',
+        'netGeneration': 'generation_mwh',
+        'generation': 'generation_mwh'
     }
 
-    # Rename columns
-    df = df.rename(columns=column_mapping)
+    # Rename columns (only rename if column exists)
+    for old_name, new_name in column_mapping.items():
+        if old_name in df.columns:
+            df = df.rename(columns={old_name: new_name})
 
-    # Try to identify the value column (check all possible names)
-    value_col = None
-    possible_value_cols = ['generation', 'value', 'Generation', 'Value', 'GENERATION', 'VALUE']
-
-    for col in possible_value_cols:
-        if col in df.columns:
-            value_col = col
-            print(f"Found value column: {value_col}")
-            break
-
-    if value_col is None:
-        print(f"\nERROR: No generation/value column found!")
-        print(f"This means the API response doesn't contain actual generation values.")
-        print(f"The dataset might only contain metadata, or we need different parameters.")
-        print(f"\nAll columns in response: {list(df.columns)}")
+    # Check if we have the critical generation value column
+    if 'generation_mwh' not in df.columns:
+        print(f"\nERROR: No generation value column found!")
+        print(f"Expected 'net_generation' or similar, but got: {list(df.columns)}")
+        print(f"\nThis endpoint might not contain generation values.")
         return pd.DataFrame()
 
+    print(f"✓ Found generation column: generation_mwh")
+
     # Check for required columns (using mapped names)
-    required_cols = ['period', 'state', 'fuel_type', 'sector']
+    required_cols = ['period', 'state']
     missing = [col for col in required_cols if col not in df.columns]
 
     if missing:
@@ -195,32 +197,23 @@ def process_generation_data(all_records, filter_states=None):
         print(f"Available: {list(df.columns)}")
         return pd.DataFrame()
 
-    print(f"\nApplying filters in Python (facets not supported by this dataset):")
-
-    # Filter to electric_power sector ONLY (utility-scale electricity)
+    print(f"\nApplying filters in Python:")
     print(f"  Original records: {len(df)}")
 
-    # Debug: Check what sector values exist
-    print(f"  Unique sector values: {df['sector'].unique()[:10]}")  # Show first 10
-
-    # Try filtering by sector - might be 'electric_power', 'ELE', '1', or something else
-    sector_filters = ['electric_power', 'ELE', 'electric-power', '1', '01']
-    df_filtered = None
-
-    for sector_val in sector_filters:
-        temp_df = df[df['sector'] == sector_val].copy()
-        if len(temp_df) > 0:
-            print(f"  ✓ Found {len(temp_df)} records with sector='{sector_val}'")
-            df_filtered = temp_df
-            break
-
-    if df_filtered is None or len(df_filtered) == 0:
-        print(f"  WARNING: None of the expected sector values found. Continuing with all sectors.")
-        df_filtered = df.copy()
+    # Filter by sector if the column exists (EIA-923 is already utility-scale only)
+    if 'sector' in df.columns:
+        print(f"  Unique sector values: {df['sector'].unique()[:10]}")
+        # EIA-923 is already utility-scale (>= 1 MW), but we can filter if needed
+        # Common sector codes: electric_power, ELE, 1, etc.
+        sector_filters = ['electric_power', 'ELE', 'electric-power', '1', '01', 2]
+        for sector_val in sector_filters:
+            temp_df = df[df['sector'] == sector_val].copy()
+            if len(temp_df) > 0:
+                print(f"  ✓ Filtering to sector='{sector_val}': {len(temp_df)} records")
+                df = temp_df
+                break
     else:
-        df = df_filtered
-
-    print(f"  After sector filter: {len(df)}")
+        print(f"  Note: No sector column - EIA-923 is already utility-scale only (>= 1 MW)")
 
     # Filter to desired states if specified
     if filter_states:
@@ -228,11 +221,14 @@ def process_generation_data(all_records, filter_states=None):
         df = df[df['state'].isin(filter_states)].copy()
         print(f"  After state filter {filter_states}: {len(df)}")
 
-    # Filter to only fuel types we care about
-    print(f"  Unique fuel_type values (sample): {df['fuel_type'].unique()[:15]}")
-    valid_fuel_codes = list(FUEL_TYPES.keys())
-    df = df[df['fuel_type'].isin(valid_fuel_codes)].copy()
-    print(f"  After fuel_type filter: {len(df)}")
+    # Filter to only fuel types we care about (if fuel_type column exists)
+    if 'fuel_type' in df.columns:
+        print(f"  Unique fuel_type values (sample): {df['fuel_type'].unique()[:15]}")
+        valid_fuel_codes = list(FUEL_TYPES.keys())
+        df = df[df['fuel_type'].isin(valid_fuel_codes)].copy()
+        print(f"  After fuel_type filter: {len(df)}")
+    else:
+        print(f"  Note: No fuel_type column found, will aggregate all fuel types")
 
     if df.empty:
         print("WARNING: No records remain after filtering!")
@@ -241,22 +237,25 @@ def process_generation_data(all_records, filter_states=None):
     # Clean and transform
     df['year'] = pd.to_numeric(df['period'], errors='coerce')
 
-    # Map fuel codes to readable names
-    df['fuel_name'] = df['fuel_type'].map(FUEL_TYPES)
-
-    # Handle unmapped fuel types (keep original code if not in mapping)
-    df.loc[df['fuel_name'].isna(), 'fuel_name'] = df.loc[df['fuel_name'].isna(), 'fuel_type']
-
-    # Now use fuel_name as our fuel_type column for consistency
-    df['fuel_type'] = df['fuel_name']
-
-    df['generation_mwh'] = pd.to_numeric(df[value_col], errors='coerce')
+    # Ensure generation_mwh is numeric
+    df['generation_mwh'] = pd.to_numeric(df['generation_mwh'], errors='coerce')
 
     # Convert MWh to GWh
     df['generation_gwh'] = df['generation_mwh'] / 1000
 
-    # Aggregate by year, state, fuel type
-    result = df.groupby(['year', 'state', 'fuel_type'])['generation_gwh'].sum().reset_index()
+    # Map fuel codes to readable names if fuel_type exists
+    if 'fuel_type' in df.columns:
+        df['fuel_name'] = df['fuel_type'].map(FUEL_TYPES)
+        # Handle unmapped fuel types (keep original code if not in mapping)
+        df.loc[df['fuel_name'].isna(), 'fuel_name'] = df.loc[df['fuel_name'].isna(), 'fuel_type']
+        df['fuel_type'] = df['fuel_name']
+
+        # Aggregate by year, state, fuel type
+        result = df.groupby(['year', 'state', 'fuel_type'])['generation_gwh'].sum().reset_index()
+    else:
+        # If no fuel_type column, just aggregate by year and state
+        result = df.groupby(['year', 'state'])['generation_gwh'].sum().reset_index()
+        result['fuel_type'] = 'all'
 
     # Pivot to wide format
     pivot = result.pivot_table(
@@ -294,11 +293,11 @@ def main():
 
     print(f"\nTarget states for analysis: {test_states}")
     print(f"Time range: {start_year}-{end_year}")
-    print("\nNOTE: This dataset doesn't support state/sector/fuel_type facets")
-    print("Fetching all data, then filtering to:")
-    print(f"  - Sector: electric_power (utility-scale only)")
+    print("\nUsing: EIA-923 generation table")
+    print("This contains actual net_generation values in MWh")
+    print("\nFetching all data, then filtering to:")
     print(f"  - States: {', '.join(test_states)}")
-    print(f"  - Fuel types: {', '.join(FUEL_TYPES.keys())}")
+    print(f"  - Fuel types (if available): {', '.join(FUEL_TYPES.keys())}")
 
     # Fetch ALL data (no state filter possible in API)
     all_records = fetch_all_generation_data(api_key, start_year, end_year)
