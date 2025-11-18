@@ -100,10 +100,11 @@ STATE_NAMES = {
 # Current datacenter hubs
 DATACENTER_HUBS = ['VA', 'TX', 'CA', 'GA', 'NC', 'IL', 'OR', 'AZ', 'NJ', 'OH']
 
-# Goldman Sachs datacenter demand projections (GW)
-DATACENTER_DEMAND_GW = {
-    2023: 22, 2024: 25, 2025: 28, 2026: 31, 2027: 35,
-    2028: 42, 2029: 46, 2030: 50
+# Historical datacenter electricity demand (GWh)
+# Source: IEA and industry reports
+DATACENTER_DEMAND_HISTORICAL = {
+    2023: 147000,  # 147 TWh
+    2024: 178000   # 178 TWh
 }
 
 
@@ -143,6 +144,50 @@ def print_section_header(title: str):
 def print_progress(message: str, indent: int = 2):
     """Print progress message with indentation."""
     print(" " * indent + "• " + message)
+
+
+def load_baseline_demand_cagr() -> Tuple[Optional[float], float]:
+    """
+    Load historical sales data and calculate baseline demand CAGR.
+
+    Returns:
+        tuple: (baseline_sales_2024_gwh, baseline_cagr)
+               baseline_cagr is returned as decimal (e.g., 0.01 for 1%)
+
+    Raises:
+        FileNotFoundError: If sales data file is not found
+    """
+    sales_file = Path('eia_sales_data_by_sector.csv')
+
+    if not sales_file.exists():
+        print_progress(f"WARNING: {sales_file} not found. Using fallback baseline demand growth.")
+        # Fallback: Use 2024 generation data and assume 1% growth
+        return None, 0.01
+
+    # Load sales data
+    sales_df = pd.read_csv(sales_file)
+
+    # Assuming columns: year, total_sales_gwh (or similar)
+    # Sort by year and get first and last years
+    sales_df = sales_df.sort_values('year')
+
+    first_year = sales_df.iloc[0]['year']
+    last_year = sales_df.iloc[-1]['year']
+    first_sales = sales_df.iloc[0]['total_sales_gwh']
+    last_sales = sales_df.iloc[-1]['total_sales_gwh']
+
+    num_years = last_year - first_year
+
+    # Calculate CAGR (as decimal, not percentage)
+    if num_years > 0 and first_sales > 0:
+        baseline_cagr = ((last_sales / first_sales) ** (1 / num_years)) - 1
+    else:
+        baseline_cagr = 0.01  # Fallback to 1%
+
+    print_progress(f"Baseline demand CAGR ({first_year}-{last_year}): {baseline_cagr*100:.2f}%")
+    print_progress(f"Baseline sales ({last_year}): {last_sales:,.0f} GWh")
+
+    return last_sales, baseline_cagr
 
 
 # ============================================================================
@@ -545,8 +590,8 @@ def forecast_us_by_source(df: pd.DataFrame) -> pd.DataFrame:
 
         col_name = f'{source}_generation_gwh'
 
-        # Use data from 2011-2024 for training
-        train_data = us_data[(us_data['year'] >= 2011) & (us_data['year'] <= 2024)]
+        # Use data from 2014-2024 for training (EIA-923 data starts at 2014)
+        train_data = us_data[(us_data['year'] >= 2014) & (us_data['year'] <= 2024)]
 
         X = train_data['year'].values.reshape(-1, 1)
         y = train_data[col_name].fillna(0).values
@@ -608,8 +653,11 @@ def run_scenario_analysis(
     """
     Calculate energy gap under different growth scenarios.
 
+    Uses historical baseline demand CAGR and datacenter CAGR to calculate
+    excess datacenter demand that grows faster than baseline.
+
     Args:
-        us_forecast: US forecasts by source
+        us_forecast: US forecasts by source (with historical CAGRs)
         df: Master dataframe
 
     Returns:
@@ -619,12 +667,36 @@ def run_scenario_analysis(
 
     print_progress("Calculating supply-demand gap scenarios...")
 
-    # Get 2024 baseline data
+    # Load baseline demand CAGR from historical sales data
+    baseline_sales, baseline_demand_cagr = load_baseline_demand_cagr()
+
+    # Get 2024 baseline data for supply
     us_2024 = df[(df['state'] == 'US') & (df['year'] == 2024)].iloc[0]
 
-    # Note: total_sales_gwh not available from EIA-923, use total_generation_gwh as proxy
-    # In reality, sales ≈ 0.92-0.95 of generation (accounting for line losses)
-    estimated_sales = us_2024['total_generation_gwh'] * 0.93  # Assume 7% line losses
+    # If sales data not available, use generation as proxy
+    if baseline_sales is None:
+        baseline_sales = us_2024['total_generation_gwh'] * 0.93  # Assume 7% line losses
+        print_progress(f"Using estimated 2024 baseline sales: {baseline_sales:,.0f} GWh")
+
+    # Calculate datacenter CAGR from historical values
+    dc_2023 = DATACENTER_DEMAND_HISTORICAL[2023]
+    dc_2024 = DATACENTER_DEMAND_HISTORICAL[2024]
+    datacenter_cagr = (dc_2024 / dc_2023) - 1
+    print_progress(f"Datacenter demand CAGR (2023-2024): {datacenter_cagr*100:.1f}%")
+    print_progress(f"Baseline demand CAGR: {baseline_demand_cagr*100:.2f}%")
+
+    # Extract actual historical CAGRs from forecast data for baseline scenario
+    baseline_cagrs = {}
+    for source in ['solar', 'wind', 'gas', 'coal', 'nuclear', 'hydro']:
+        source_forecast = us_forecast[us_forecast['source'] == source]
+        if len(source_forecast) > 0:
+            baseline_cagrs[source] = source_forecast.iloc[0]['cagr_historical'] / 100  # Convert to decimal
+        else:
+            baseline_cagrs[source] = 0.0
+
+    print_progress(f"Using actual historical CAGRs for baseline scenario:")
+    for source, cagr in baseline_cagrs.items():
+        print_progress(f"  {source}: {cagr*100:.1f}%", indent=4)
 
     base_year_data = {
         'solar': us_2024['solar_generation_gwh'],
@@ -633,46 +705,51 @@ def run_scenario_analysis(
         'nuclear': us_2024['nuclear_generation_gwh'],
         'coal': us_2024['coal_generation_gwh'],
         'hydro': us_2024['hydro_generation_gwh'],
-        'total_sales': estimated_sales  # Use estimated sales based on generation
+        'baseline_sales': baseline_sales,
+        'datacenter_2024': dc_2024
     }
 
     # Define scenarios
     scenarios = {
         'baseline': {
             'description': 'Historical growth rates continue',
-            'solar_cagr': 0.30,
-            'wind_cagr': 0.12,
-            'gas_cagr': 0.02,
-            'nuclear_cagr': 0.0,
-            'coal_cagr': -0.05,
-            'demand_multiplier': 1.0
+            'solar_cagr': baseline_cagrs['solar'],
+            'wind_cagr': baseline_cagrs['wind'],
+            'gas_cagr': baseline_cagrs['gas'],
+            'nuclear_cagr': baseline_cagrs['nuclear'],
+            'coal_cagr': baseline_cagrs['coal'],
+            'hydro_cagr': baseline_cagrs['hydro'],
+            'scenario_cagr_multiplier': 1.0
         },
         'accelerated_renewable': {
             'description': 'Policy push for faster renewable deployment',
-            'solar_cagr': 0.40,
-            'wind_cagr': 0.18,
-            'gas_cagr': 0.01,
-            'nuclear_cagr': 0.02,
-            'coal_cagr': -0.08,
-            'demand_multiplier': 1.0
+            'solar_cagr': baseline_cagrs['solar'] * 1.3,  # 30% faster solar growth
+            'wind_cagr': baseline_cagrs['wind'] * 1.5,     # 50% faster wind growth
+            'gas_cagr': baseline_cagrs['gas'] * 0.5,       # Half the gas growth
+            'nuclear_cagr': 0.02,                          # 2% nuclear growth (new builds)
+            'coal_cagr': baseline_cagrs['coal'] * 1.5,     # Faster coal decline (more negative)
+            'hydro_cagr': baseline_cagrs['hydro'],
+            'scenario_cagr_multiplier': 1.0
         },
         'constrained': {
             'description': 'Permitting delays slow buildout',
-            'solar_cagr': 0.20,
-            'wind_cagr': 0.08,
-            'gas_cagr': 0.03,
-            'nuclear_cagr': 0.0,
-            'coal_cagr': -0.03,
-            'demand_multiplier': 1.0
+            'solar_cagr': baseline_cagrs['solar'] * 0.6,   # 40% slower solar growth
+            'wind_cagr': baseline_cagrs['wind'] * 0.6,     # 40% slower wind growth
+            'gas_cagr': baseline_cagrs['gas'] * 1.5,       # More gas to fill gap
+            'nuclear_cagr': 0.0,                           # No new nuclear
+            'coal_cagr': baseline_cagrs['coal'] * 0.5,     # Slower coal decline (less negative)
+            'hydro_cagr': baseline_cagrs['hydro'],
+            'scenario_cagr_multiplier': 1.0
         },
         'ai_boom': {
-            'description': 'Datacenter demand exceeds projections',
-            'solar_cagr': 0.30,
-            'wind_cagr': 0.12,
-            'gas_cagr': 0.05,
-            'nuclear_cagr': 0.0,
-            'coal_cagr': -0.05,
-            'demand_multiplier': 1.3
+            'description': 'Datacenter demand exceeds projections (50% faster growth)',
+            'solar_cagr': baseline_cagrs['solar'],
+            'wind_cagr': baseline_cagrs['wind'],
+            'gas_cagr': baseline_cagrs['gas'],
+            'nuclear_cagr': baseline_cagrs['nuclear'],
+            'coal_cagr': baseline_cagrs['coal'],
+            'hydro_cagr': baseline_cagrs['hydro'],
+            'scenario_cagr_multiplier': 1.5  # Datacenter CAGR grows 50% faster
         }
     }
 
@@ -684,28 +761,30 @@ def run_scenario_analysis(
         for year in range(2025, 2031):
             years_ahead = year - 2024
 
-            # Project each source
+            # Project each source using scenario-specific CAGRs
             solar_gwh = base_year_data['solar'] * (1 + params['solar_cagr']) ** years_ahead
             wind_gwh = base_year_data['wind'] * (1 + params['wind_cagr']) ** years_ahead
             gas_gwh = base_year_data['gas'] * (1 + params['gas_cagr']) ** years_ahead
             nuclear_gwh = base_year_data['nuclear'] * (1 + params['nuclear_cagr']) ** years_ahead
             coal_gwh = base_year_data['coal'] * (1 + params['coal_cagr']) ** years_ahead
-            hydro_gwh = base_year_data['hydro']  # Assume flat
+            hydro_gwh = base_year_data['hydro'] * (1 + params['hydro_cagr']) ** years_ahead
 
             total_supply = solar_gwh + wind_gwh + gas_gwh + nuclear_gwh + coal_gwh + hydro_gwh
 
-            # Calculate demand
-            base_demand_growth = 0.01  # 1% annual baseline growth
-            base_demand_future = base_year_data['total_sales'] * (1 + base_demand_growth) ** years_ahead
+            # Calculate baseline demand using historical CAGR
+            base_demand_future = base_year_data['baseline_sales'] * (1 + baseline_demand_cagr) ** years_ahead
 
-            # Add datacenter demand
-            datacenter_gw = DATACENTER_DEMAND_GW.get(year, 50)
-            # Convert GW to GWh: GW × hours × capacity_factor = GWh
-            # 1 GW running for 8760 hours at 90% capacity = 7,884 GWh
-            datacenter_gwh = datacenter_gw * 8760 * 0.9
-            datacenter_gwh_adjusted = datacenter_gwh * params['demand_multiplier']
+            # Calculate EXCESS datacenter demand
+            # This represents growth ABOVE baseline demand growth
+            # Formula: (datacenter * (1 + dc_cagr)^n) - (datacenter * (1 + baseline_cagr)^n)
+            effective_dc_cagr = datacenter_cagr * params['scenario_cagr_multiplier']
 
-            total_demand = base_demand_future + datacenter_gwh_adjusted
+            datacenter_projected = base_year_data['datacenter_2024'] * (1 + effective_dc_cagr) ** years_ahead
+            datacenter_if_baseline = base_year_data['datacenter_2024'] * (1 + baseline_demand_cagr) ** years_ahead
+            excess_datacenter_demand = datacenter_projected - datacenter_if_baseline
+
+            # Total demand = baseline demand + excess datacenter growth
+            total_demand = base_demand_future + excess_datacenter_demand
 
             # Calculate gap (supply - demand)
             # Positive gap = surplus (supply > demand)
@@ -719,7 +798,8 @@ def run_scenario_analysis(
                 'scenario_description': params['description'],
                 'total_supply_gwh': total_supply,
                 'base_demand_gwh': base_demand_future,
-                'datacenter_demand_gwh': datacenter_gwh_adjusted,
+                'datacenter_total_gwh': datacenter_projected,
+                'excess_datacenter_demand_gwh': excess_datacenter_demand,
                 'total_demand_gwh': total_demand,
                 'gap_gwh': gap_gwh,
                 'gap_percentage': gap_percentage,
