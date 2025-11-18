@@ -317,6 +317,9 @@ def convert_mwh_to_gwh(df):
     Convert megawatthours (MWh) to gigawatthours (GWh).
     1 GWh = 1,000 MWh
 
+    NOTE: EIA-923 Excel files report in actual MWh (not thousands).
+    Must divide by 1,000 to convert to GWh.
+
     Args:
         df: DataFrame with *_generation_mwh columns
 
@@ -328,7 +331,7 @@ def convert_mwh_to_gwh(df):
     # Find all generation columns
     mwh_cols = [col for col in df.columns if col.endswith('_generation_mwh')]
 
-    # Convert to GWh
+    # Convert to GWh: divide MWh by 1,000
     for col in mwh_cols:
         new_col = col.replace('_mwh', '_gwh')
         df[new_col] = df[col] / 1000
