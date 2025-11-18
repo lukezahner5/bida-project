@@ -69,7 +69,8 @@ def fetch_generation_data(api_key: str, state: str, start_year: int, end_year: i
 
     url = BASE_URL + ENDPOINT
 
-    # Build query parameters using correct facet names
+    # Build query parameters
+    # NOTE: fuel_type is NOT a facet in this dataset - we filter it in Python after retrieval
     params = {
         "api_key": api_key,
         "frequency": "annual",
@@ -84,10 +85,6 @@ def fetch_generation_data(api_key: str, state: str, start_year: int, end_year: i
         # State filter
         "facets[state][]": state
     }
-
-    # Add fuel type filters (use correct facet name: fuel_type)
-    for i, fuel_code in enumerate(FUEL_TYPES.keys()):
-        params[f"facets[fuel_type][{i}]"] = fuel_code
 
     try:
         response = requests.get(url, params=params, timeout=30)
@@ -149,6 +146,14 @@ def process_generation_data(all_records):
 
     # Clean and transform
     df['year'] = pd.to_numeric(df['period'], errors='coerce')
+
+    # Filter to only fuel types we care about (fuel_type is not a facet, so filter in Python)
+    valid_fuel_codes = list(FUEL_TYPES.keys())
+    print(f"Filtering to valid fuel types: {valid_fuel_codes}")
+    df = df[df['fuel_type'].isin(valid_fuel_codes)].copy()
+    print(f"Records after fuel filtering: {len(df)}")
+
+    # Map fuel codes to readable names
     df['fuel_name'] = df['fuel_type'].map(FUEL_TYPES)
 
     # Handle unmapped fuel types (keep original code if not in mapping)
