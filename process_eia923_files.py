@@ -314,24 +314,26 @@ def add_us_total(df):
 
 def convert_mwh_to_gwh(df):
     """
-    Convert megawatthours (MWh) to gigawatthours (GWh).
-    1 GWh = 1,000 MWh
+    Rename MWh columns to GWh columns.
+
+    NOTE: EIA-923 Excel files report in "thousand megawatthours" which equals GWh.
+    No conversion needed - just rename columns.
 
     Args:
         df: DataFrame with *_generation_mwh columns
 
     Returns:
-        DataFrame with *_generation_gwh columns (MWh columns removed)
+        DataFrame with *_generation_gwh columns (values unchanged)
     """
     df = df.copy()
 
     # Find all generation columns
     mwh_cols = [col for col in df.columns if col.endswith('_generation_mwh')]
 
-    # Convert to GWh
+    # Rename to GWh (NO DIVISION - data is already in thousands of MWh = GWh)
     for col in mwh_cols:
         new_col = col.replace('_mwh', '_gwh')
-        df[new_col] = df[col] / 1000
+        df[new_col] = df[col]  # Direct copy, no division
 
     # Drop MWh columns
     df = df.drop(columns=mwh_cols)
