@@ -145,6 +145,12 @@ def process_generation_data(all_records, filter_states=None):
     # Check what columns we have
     print(f"Available columns: {list(df.columns)}")
 
+    # Debug: Print first record to see all fields
+    if len(all_records) > 0:
+        print(f"\nSample record (first one):")
+        for key, value in all_records[0].items():
+            print(f"  {key}: {value}")
+
     # The response from electric-power-operational-data should have:
     # - period (year)
     # - state
@@ -152,22 +158,40 @@ def process_generation_data(all_records, filter_states=None):
     # - sector
     # - generation (value in MWh)
 
-    # Try to identify the value column
+    # Map actual column names to expected names
+    # The API uses different column names than documented
+    column_mapping = {
+        'location': 'state',
+        'sectorid': 'sector',
+        'fueltypeid': 'fuel_type'
+    }
+
+    # Rename columns
+    df = df.rename(columns=column_mapping)
+
+    # Try to identify the value column (check all possible names)
     value_col = None
-    if 'generation' in df.columns:
-        value_col = 'generation'
-    elif 'value' in df.columns:
-        value_col = 'value'
-    else:
-        print(f"ERROR: No generation/value column found. Columns: {list(df.columns)}")
+    possible_value_cols = ['generation', 'value', 'Generation', 'Value', 'GENERATION', 'VALUE']
+
+    for col in possible_value_cols:
+        if col in df.columns:
+            value_col = col
+            print(f"Found value column: {value_col}")
+            break
+
+    if value_col is None:
+        print(f"\nERROR: No generation/value column found!")
+        print(f"This means the API response doesn't contain actual generation values.")
+        print(f"The dataset might only contain metadata, or we need different parameters.")
+        print(f"\nAll columns in response: {list(df.columns)}")
         return pd.DataFrame()
 
-    # Check for required columns
+    # Check for required columns (using mapped names)
     required_cols = ['period', 'state', 'fuel_type', 'sector']
     missing = [col for col in required_cols if col not in df.columns]
 
     if missing:
-        print(f"ERROR: Missing required columns: {missing}")
+        print(f"ERROR: Missing required columns after mapping: {missing}")
         print(f"Available: {list(df.columns)}")
         return pd.DataFrame()
 
@@ -175,15 +199,37 @@ def process_generation_data(all_records, filter_states=None):
 
     # Filter to electric_power sector ONLY (utility-scale electricity)
     print(f"  Original records: {len(df)}")
-    df = df[df['sector'] == 'electric_power'].copy()
-    print(f"  After sector=electric_power filter: {len(df)}")
+
+    # Debug: Check what sector values exist
+    print(f"  Unique sector values: {df['sector'].unique()[:10]}")  # Show first 10
+
+    # Try filtering by sector - might be 'electric_power', 'ELE', '1', or something else
+    sector_filters = ['electric_power', 'ELE', 'electric-power', '1', '01']
+    df_filtered = None
+
+    for sector_val in sector_filters:
+        temp_df = df[df['sector'] == sector_val].copy()
+        if len(temp_df) > 0:
+            print(f"  ✓ Found {len(temp_df)} records with sector='{sector_val}'")
+            df_filtered = temp_df
+            break
+
+    if df_filtered is None or len(df_filtered) == 0:
+        print(f"  WARNING: None of the expected sector values found. Continuing with all sectors.")
+        df_filtered = df.copy()
+    else:
+        df = df_filtered
+
+    print(f"  After sector filter: {len(df)}")
 
     # Filter to desired states if specified
     if filter_states:
+        print(f"  Unique state values (sample): {df['state'].unique()[:10]}")
         df = df[df['state'].isin(filter_states)].copy()
         print(f"  After state filter {filter_states}: {len(df)}")
 
     # Filter to only fuel types we care about
+    print(f"  Unique fuel_type values (sample): {df['fuel_type'].unique()[:15]}")
     valid_fuel_codes = list(FUEL_TYPES.keys())
     df = df[df['fuel_type'].isin(valid_fuel_codes)].copy()
     print(f"  After fuel_type filter: {len(df)}")
