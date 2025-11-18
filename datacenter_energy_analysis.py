@@ -723,22 +723,22 @@ def run_scenario_analysis(
         },
         'accelerated_renewable': {
             'description': 'Policy push for faster renewable deployment',
-            'solar_cagr': baseline_cagrs['solar'] * 1.3,  # 30% faster solar growth
-            'wind_cagr': baseline_cagrs['wind'] * 1.5,     # 50% faster wind growth
-            'gas_cagr': baseline_cagrs['gas'] * 0.5,       # Half the gas growth
-            'nuclear_cagr': 0.02,                          # 2% nuclear growth (new builds)
-            'coal_cagr': baseline_cagrs['coal'] * 1.5,     # Faster coal decline (more negative)
+            'solar_cagr': baseline_cagrs['solar'],
+            'wind_cagr': baseline_cagrs['wind'],
+            'gas_cagr': baseline_cagrs['gas'],
+            'nuclear_cagr': baseline_cagrs['nuclear'],
+            'coal_cagr': baseline_cagrs['coal'],
             'hydro_cagr': baseline_cagrs['hydro'],
             'scenario_cagr_multiplier': 1.0
         },
         'constrained': {
-            'description': 'Permitting delays slow buildout',
-            'solar_cagr': baseline_cagrs['solar'] * 0.6,   # 40% slower solar growth
-            'wind_cagr': baseline_cagrs['wind'] * 0.6,     # 40% slower wind growth
-            'gas_cagr': baseline_cagrs['gas'] * 1.5,       # More gas to fill gap
-            'nuclear_cagr': 0.0,                           # No new nuclear
-            'coal_cagr': baseline_cagrs['coal'] * 0.5,     # Slower coal decline (less negative)
-            'hydro_cagr': baseline_cagrs['hydro'],
+            'description': 'Permitting delays slow buildout (15% slower growth)',
+            'solar_cagr': baseline_cagrs['solar'] * 0.85,
+            'wind_cagr': baseline_cagrs['wind'] * 0.85,
+            'gas_cagr': baseline_cagrs['gas'] * 0.85,
+            'nuclear_cagr': baseline_cagrs['nuclear'] * 0.85,
+            'coal_cagr': baseline_cagrs['coal'] * 0.85,
+            'hydro_cagr': baseline_cagrs['hydro'] * 0.85,
             'scenario_cagr_multiplier': 1.0
         },
         'ai_boom': {
