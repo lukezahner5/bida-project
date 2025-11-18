@@ -238,14 +238,84 @@ def load_eia_data() -> pd.DataFrame:
     return generation_df
 
 
+def load_sales_data() -> Optional[pd.DataFrame]:
+    """
+    Load retail sales data from EIA API collector output.
+
+    Returns:
+        DataFrame: Sales data by state and year (2014-2024), or None if not available
+    """
+    data_dir = Path.cwd()
+    sales_file = 'eia_retail_sales_by_sector.csv'
+
+    if not (data_dir / sales_file).exists():
+        print_progress(f"⚠ {sales_file} not found - sales metrics will be unavailable")
+        return None
+
+    print_progress(f"Loading sales data from {sales_file}...")
+    sales_df = pd.read_csv(data_dir / sales_file)
+
+    # Filter to 2014-2024 to match generation data
+    sales_df = sales_df[(sales_df['year'] >= 2014) & (sales_df['year'] <= 2024)]
+
+    print_progress(f"✓ Loaded {len(sales_df):,} sales records (2014-2024)")
+    print_progress(f"  States: {sales_df['state'].nunique()}")
+
+    # Validate expected columns
+    expected_cols = ['year', 'state', 'total_sales_gwh']
+    missing_cols = [col for col in expected_cols if col not in sales_df.columns]
+    if missing_cols:
+        print_progress(f"⚠ Missing columns in sales data: {missing_cols}")
+        return None
+
+    return sales_df[['year', 'state', 'total_sales_gwh']]
+
+
+def load_price_data() -> Optional[pd.DataFrame]:
+    """
+    Load electricity price data from EIA API collector output.
+
+    Returns:
+        DataFrame: Price data by state and year (2014-2024), or None if not available
+    """
+    data_dir = Path.cwd()
+    price_file = 'eia_electricity_prices.csv'
+
+    if not (data_dir / price_file).exists():
+        print_progress(f"⚠ {price_file} not found - price metrics will be unavailable")
+        return None
+
+    print_progress(f"Loading price data from {price_file}...")
+    price_df = pd.read_csv(data_dir / price_file)
+
+    # Filter to 2014-2024 to match generation data
+    price_df = price_df[(price_df['year'] >= 2014) & (price_df['year'] <= 2024)]
+
+    print_progress(f"✓ Loaded {len(price_df):,} price records (2014-2024)")
+    print_progress(f"  States: {price_df['state'].nunique()}")
+
+    # Validate expected columns
+    expected_cols = ['year', 'state', 'avg_price_cents_per_kwh']
+    missing_cols = [col for col in expected_cols if col not in price_df.columns]
+    if missing_cols:
+        print_progress(f"⚠ Missing columns in price data: {missing_cols}")
+        return None
+
+    return price_df[['year', 'state', 'avg_price_cents_per_kwh']]
+
+
 def prepare_master_dataset(
-    generation_df: pd.DataFrame
+    generation_df: pd.DataFrame,
+    sales_df: Optional[pd.DataFrame] = None,
+    price_df: Optional[pd.DataFrame] = None
 ) -> pd.DataFrame:
     """
     Prepare master dataset with calculated metrics.
 
     Args:
         generation_df: Generation by source data (from EIA-923)
+        sales_df: Optional sales data by state and year
+        price_df: Optional price data by state and year
 
     Returns:
         DataFrame: Master dataset with all metrics
@@ -254,6 +324,22 @@ def prepare_master_dataset(
 
     # Start with generation data
     df = generation_df.copy()
+
+    # Merge sales data if available
+    if sales_df is not None:
+        print_progress("Merging sales data...")
+        df = df.merge(sales_df, on=['year', 'state'], how='left')
+        print_progress(f"✓ Merged sales data")
+    else:
+        df['total_sales_gwh'] = np.nan
+
+    # Merge price data if available
+    if price_df is not None:
+        print_progress("Merging price data...")
+        df = df.merge(price_df, on=['year', 'state'], how='left')
+        print_progress(f"✓ Merged price data")
+    else:
+        df['avg_price_cents_per_kwh'] = np.nan
 
     # Ensure all required generation columns exist and fill missing values with 0
     required_generation_cols = [
@@ -335,14 +421,29 @@ def prepare_master_dataset(
     # Per capita metrics
     df['generation_per_capita_mwh'] = (df['total_generation_gwh'] * 1000) / df['population'].replace(0, np.nan)
 
-    # Sales and capacity data not available from EIA-923 - set to NaN
-    df['total_sales_gwh'] = np.nan
-    df['consumption_per_capita_mwh'] = np.nan
+    # Calculate sales-related metrics if sales data is available
+    # Note: total_sales_gwh and avg_price_cents_per_kwh were merged earlier
+    if 'total_sales_gwh' in df.columns and df['total_sales_gwh'].notna().any():
+        print_progress("Calculating excess capacity metrics...")
+
+        # Consumption per capita
+        df['consumption_per_capita_mwh'] = (df['total_sales_gwh'] * 1000) / df['population'].replace(0, np.nan)
+
+        # Net balance (positive = surplus, negative = deficit)
+        df['net_balance_gwh'] = df['total_generation_gwh'] - df['total_sales_gwh']
+
+        # Surplus percentage (what % of generation is excess)
+        df['surplus_percentage'] = (df['net_balance_gwh'] / df['total_generation_gwh'].replace(0, np.nan)) * 100
+
+        print_progress("✓ Calculated surplus/deficit metrics")
+    else:
+        df['consumption_per_capita_mwh'] = np.nan
+        df['net_balance_gwh'] = np.nan
+        df['surplus_percentage'] = np.nan
+
+    # Capacity data not available from EIA-923 - set to NaN
     df['total_capacity_mw'] = np.nan
     df['capacity_utilization_pct'] = np.nan
-    df['net_balance_gwh'] = np.nan
-    df['surplus_percentage'] = np.nan
-    df['avg_price_cents_per_kwh'] = np.nan
 
     # Fill infinite values with NaN
     df = df.replace([np.inf, -np.inf], np.nan)
@@ -852,8 +953,8 @@ def perform_state_clustering(df: pd.DataFrame) -> Dict:
     # Get 2024 data for all states (excluding US total)
     df_2024 = df[(df['year'] == 2024) & (df['state'] != 'US')].copy()
 
-    # Select clustering features (only use available features from EIA-923)
-    # Note: surplus_percentage, avg_price_cents_per_kwh, total_capacity_mw not available
+    # Select clustering features
+    # Include surplus and price if available
     clustering_features = [
         'renewable_pct',
         'generation_per_capita_mwh',
@@ -863,6 +964,15 @@ def perform_state_clustering(df: pd.DataFrame) -> Dict:
         'coal_cagr',
         'total_generation_cagr'
     ]
+
+    # Add surplus and price features if available
+    if 'surplus_percentage' in df_2024.columns and df_2024['surplus_percentage'].notna().any():
+        clustering_features.append('surplus_percentage')
+        print_progress("✓ Including surplus_percentage in clustering")
+
+    if 'avg_price_cents_per_kwh' in df_2024.columns and df_2024['avg_price_cents_per_kwh'].notna().any():
+        clustering_features.append('avg_price_cents_per_kwh')
+        print_progress("✓ Including avg_price_cents_per_kwh in clustering")
 
     # Remove states with missing data
     df_clustering = df_2024[['state', 'state_name', 'region'] + clustering_features].dropna()
@@ -898,8 +1008,8 @@ def perform_state_clustering(df: pd.DataFrame) -> Dict:
     kmeans = KMeans(n_clusters=optimal_k, random_state=42, n_init=10)
     df_clustering['cluster'] = kmeans.fit_predict(X_scaled)
 
-    # Characterize each cluster (only use available features)
-    cluster_profiles = df_clustering.groupby('cluster').agg({
+    # Characterize each cluster (dynamically include available features)
+    agg_dict = {
         'renewable_pct': 'mean',
         'generation_per_capita_mwh': 'mean',
         'solar_cagr': 'mean',
@@ -908,16 +1018,35 @@ def perform_state_clustering(df: pd.DataFrame) -> Dict:
         'coal_cagr': 'mean',
         'total_generation_cagr': 'mean',
         'state': 'count'
-    }).round(2)
+    }
+
+    # Add surplus and price if they're in clustering features
+    if 'surplus_percentage' in clustering_features:
+        agg_dict['surplus_percentage'] = 'mean'
+    if 'avg_price_cents_per_kwh' in clustering_features:
+        agg_dict['avg_price_cents_per_kwh'] = 'mean'
+
+    cluster_profiles = df_clustering.groupby('cluster').agg(agg_dict).round(2)
     cluster_profiles.rename(columns={'state': 'state_count'}, inplace=True)
 
-    # Label clusters based on characteristics (only using available metrics)
+    # Label clusters based on characteristics (including surplus/price if available)
     cluster_labels = {}
     for cluster_id in range(optimal_k):
         profile = cluster_profiles.loc[cluster_id]
 
-        # Simple heuristic labeling based on characteristics
-        if profile['renewable_pct'] > 40 and profile['solar_cagr'] > 20:
+        # Check if surplus/price data available
+        has_surplus = 'surplus_percentage' in profile.index
+        has_price = 'avg_price_cents_per_kwh' in profile.index
+
+        # Enhanced labeling with surplus and price considerations
+        if has_surplus and profile.get('surplus_percentage', 0) > 15:
+            if has_price and profile.get('avg_price_cents_per_kwh', 15) < 9:
+                label = 'High Surplus, Low Price - Prime Locations'
+            else:
+                label = 'High Surplus - Capacity Rich'
+        elif has_surplus and profile.get('surplus_percentage', 0) < 0:
+            label = 'Energy Deficit States'
+        elif profile['renewable_pct'] > 40 and profile['solar_cagr'] > 20:
             label = 'Renewable Leaders'
         elif profile['coal_cagr'] > -2 and profile['renewable_pct'] < 20:
             label = 'Fossil Dependent'
@@ -1082,51 +1211,106 @@ def calculate_suitability_scores(df: pd.DataFrame) -> pd.DataFrame:
     df_2024 = df[(df['year'] == 2024) & (df['state'] != 'US')].copy()
 
     # Calculate composite suitability score (0-100)
-    # Note: Modified for EIA-923 data - no surplus, price, or capacity data available
+    # Includes surplus and price data if available
     def calc_suitability(row):
         score = 0
 
-        # Factor 1: Renewable Energy (35 points max - increased weight)
-        renewable_score = min(35, row['renewable_pct'] / 3)
-        score += renewable_score
+        # Check if surplus and price data are available
+        has_surplus = pd.notna(row.get('surplus_percentage'))
+        has_price = pd.notna(row.get('avg_price_cents_per_kwh'))
 
-        # Factor 2: Growth Trajectory (25 points max - increased weight)
-        growth_score = min(25, max(0, row['total_generation_cagr'] * 5 + 12.5))
-        score += growth_score
+        if has_surplus and has_price:
+            # Full scoring with surplus and price data
+            # Factor 1: Renewable Energy (25 points max)
+            renewable_score = min(25, row['renewable_pct'] / 4)
+            score += renewable_score
 
-        # Factor 3: Solar Growth (20 points max)
-        solar_growth_score = min(20, max(0, row['solar_cagr'] / 2))
-        score += solar_growth_score
+            # Factor 2: Surplus Capacity (25 points max - new!)
+            # More surplus = better for datacenters
+            # 0% surplus = 0 points, 20% surplus = 25 points
+            surplus_score = min(25, max(0, row['surplus_percentage'] * 1.25))
+            score += surplus_score
 
-        # Factor 4: Wind Growth (15 points max)
-        wind_growth_score = min(15, max(0, row['wind_cagr']))
-        score += wind_growth_score
+            # Factor 3: Low Electricity Price (15 points max - new!)
+            # Lower price = higher score
+            # 5 cents/kWh = 15 points, 15 cents/kWh = 0 points
+            price_score = min(15, max(0, 15 - row['avg_price_cents_per_kwh']))
+            score += price_score
 
-        # Factor 5: Absolute Generation Scale (5 points max)
-        # Higher generation = more infrastructure
-        scale_score = min(5, np.log10(row['total_generation_gwh'] + 1) - 3)
-        score += scale_score
+            # Factor 4: Growth Trajectory (15 points max)
+            growth_score = min(15, max(0, row['total_generation_cagr'] * 5 + 7.5))
+            score += growth_score
+
+            # Factor 5: Solar Growth (10 points max)
+            solar_growth_score = min(10, max(0, row['solar_cagr'] / 4))
+            score += solar_growth_score
+
+            # Factor 6: Wind Growth (10 points max)
+            wind_growth_score = min(10, max(0, row['wind_cagr'] / 1.5))
+            score += wind_growth_score
+        else:
+            # Fallback scoring without surplus/price data (original method)
+            # Factor 1: Renewable Energy (35 points max - increased weight)
+            renewable_score = min(35, row['renewable_pct'] / 3)
+            score += renewable_score
+
+            # Factor 2: Growth Trajectory (25 points max - increased weight)
+            growth_score = min(25, max(0, row['total_generation_cagr'] * 5 + 12.5))
+            score += growth_score
+
+            # Factor 3: Solar Growth (20 points max)
+            solar_growth_score = min(20, max(0, row['solar_cagr'] / 2))
+            score += solar_growth_score
+
+            # Factor 4: Wind Growth (15 points max)
+            wind_growth_score = min(15, max(0, row['wind_cagr']))
+            score += wind_growth_score
+
+            # Factor 5: Absolute Generation Scale (5 points max)
+            # Higher generation = more infrastructure
+            scale_score = min(5, np.log10(row['total_generation_gwh'] + 1) - 3)
+            score += scale_score
 
         return round(score, 1)
 
     df_2024['suitability_score'] = df_2024.apply(calc_suitability, axis=1)
 
     # Calculate risk score (0-100, higher = more risk)
-    # Note: Modified for EIA-923 data - focus on generation trends
+    # Includes deficit and price risk if data available
     def calc_risk(row):
         risk = 0
 
+        # Check if surplus and price data are available
+        has_surplus = pd.notna(row.get('surplus_percentage'))
+        has_price = pd.notna(row.get('avg_price_cents_per_kwh'))
+
+        if has_surplus:
+            # Deficit risk (negative surplus = consuming more than producing)
+            if row['surplus_percentage'] < 0:
+                # Deficit states are risky for datacenters
+                # -10% deficit = 30 points risk, -20% deficit = 40 points
+                risk += min(40, abs(row['surplus_percentage']) * 3)
+            elif row['surplus_percentage'] < 5:
+                # Low surplus = some risk
+                risk += 10
+
+        if has_price:
+            # High electricity price risk
+            if row['avg_price_cents_per_kwh'] > 12:
+                # Above 12 cents/kWh = expensive
+                risk += min(20, (row['avg_price_cents_per_kwh'] - 12) * 4)
+
         # Negative overall growth = supply risk
         if row['total_generation_cagr'] < 0:
-            risk += 40
+            risk += 30
 
         # Low renewable penetration = policy/sustainability risk
         if row['renewable_pct'] < 20:
-            risk += 30
+            risk += 20
 
         # Declining renewable growth = future supply risk
         if row['solar_cagr'] < 10 and row['wind_cagr'] < 5:
-            risk += 20
+            risk += 15
 
         # Heavy coal dependence = transition risk
         if row['coal_pct'] > 40:
@@ -1429,7 +1613,9 @@ def main():
     try:
         # 1. Load and prepare data
         generation_df = load_eia_data()
-        master_df = prepare_master_dataset(generation_df)
+        sales_df = load_sales_data()
+        price_df = load_price_data()
+        master_df = prepare_master_dataset(generation_df, sales_df, price_df)
         master_df = calculate_growth_rates(master_df)
 
         # 2. Predictive modeling
