@@ -145,6 +145,12 @@ def process_generation_data(all_records, filter_states=None):
     # Check what columns we have
     print(f"Available columns: {list(df.columns)}")
 
+    # Debug: Print first record to see all fields
+    if len(all_records) > 0:
+        print(f"\nSample record (first one):")
+        for key, value in all_records[0].items():
+            print(f"  {key}: {value}")
+
     # The response from electric-power-operational-data should have:
     # - period (year)
     # - state
