@@ -5,11 +5,16 @@ Datacenter Energy Analysis - Statistical Modeling & Predictive Analytics
 This script performs comprehensive statistical analysis and predictive modeling
 to support hyperscaler datacenter energy procurement and site selection decisions.
 
-Requires output files from eia_data_collector.py to be present.
+Data Source: EIA-923 generation data (2014-2024)
+Requires: eia_generation_by_source_2014_2024.csv (from process_eia923_files.py)
+
+Note: This version uses manually processed EIA-923 Excel files, which contain
+utility-scale electricity generation data only. Sales, capacity, and price data
+are not available and will be excluded from analysis.
 
 Author: Data Analysis Team
-Date: 2025-11-17
-Version: 1.0
+Date: 2025-11-18
+Version: 2.0 (Updated for EIA-923 manual processing)
 """
 
 import pandas as pd
@@ -144,84 +149,81 @@ def print_progress(message: str, indent: int = 2):
 # DATA LOADING AND PREPARATION
 # ============================================================================
 
-def load_eia_data() -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+def load_eia_data() -> pd.DataFrame:
     """
-    Load all EIA datasets from CSV files.
+    Load EIA-923 generation data from manually processed Excel files.
 
     Returns:
-        Tuple of (generation_df, sales_df, capacity_df, prices_df)
+        DataFrame: Generation data by state, year, and energy source
     """
     print_section_header("[1/5] LOADING AND PREPARING DATA")
 
     data_dir = Path.cwd()
 
-    # Check if files exist
-    required_files = [
-        'eia_generation_by_source.csv',
-        'eia_retail_sales_by_sector.csv',
-        'eia_capacity_by_source.csv',
-        'eia_electricity_prices.csv'
-    ]
+    # Check if the processed EIA-923 file exists
+    generation_file = 'eia_generation_by_source_2014_2024.csv'
 
-    missing_files = [f for f in required_files if not (data_dir / f).exists()]
-    if missing_files:
+    if not (data_dir / generation_file).exists():
         raise FileNotFoundError(
-            f"Required EIA data files not found: {missing_files}\n"
-            f"Please run eia_data_collector.py first to generate these files."
+            f"Required EIA-923 data file not found: {generation_file}\n"
+            f"Please run process_eia923_files.py first to generate this file.\n"
+            f"(This script processes downloaded EIA-923 Excel files from the EIA923/ directory)"
         )
 
-    print_progress("Loading generation data...")
-    generation_df = pd.read_csv(data_dir / 'eia_generation_by_source.csv')
-
-    print_progress("Loading sales data...")
-    sales_df = pd.read_csv(data_dir / 'eia_retail_sales_by_sector.csv')
-
-    print_progress("Loading capacity data...")
-    capacity_df = pd.read_csv(data_dir / 'eia_capacity_by_source.csv')
-
-    print_progress("Loading price data...")
-    prices_df = pd.read_csv(data_dir / 'eia_electricity_prices.csv')
+    print_progress(f"Loading generation data from {generation_file}...")
+    generation_df = pd.read_csv(data_dir / generation_file)
 
     print_progress(f"✓ Loaded {len(generation_df):,} generation records")
-    print_progress(f"✓ Loaded {len(sales_df):,} sales records")
-    print_progress(f"✓ Loaded {len(capacity_df):,} capacity records")
-    print_progress(f"✓ Loaded {len(prices_df):,} price records")
+    print_progress(f"  Years: {generation_df['year'].min()}-{generation_df['year'].max()}")
+    print_progress(f"  States: {generation_df['state'].nunique()} (including US total)")
 
-    return generation_df, sales_df, capacity_df, prices_df
+    # Validate expected columns exist
+    expected_cols = [
+        'year', 'state', 'coal_generation_gwh', 'gas_generation_gwh',
+        'nuclear_generation_gwh', 'hydro_generation_gwh', 'solar_generation_gwh',
+        'wind_generation_gwh', 'total_generation_gwh'
+    ]
+
+    missing_cols = [col for col in expected_cols if col not in generation_df.columns]
+    if missing_cols:
+        raise ValueError(f"Missing expected columns in generation data: {missing_cols}")
+
+    print_progress(f"✓ All expected columns present")
+
+    return generation_df
 
 
 def prepare_master_dataset(
-    generation_df: pd.DataFrame,
-    sales_df: pd.DataFrame,
-    capacity_df: pd.DataFrame,
-    prices_df: pd.DataFrame
+    generation_df: pd.DataFrame
 ) -> pd.DataFrame:
     """
-    Merge all datasets and calculate comprehensive metrics.
+    Prepare master dataset with calculated metrics.
 
     Args:
-        generation_df: Generation by source data
-        sales_df: Sales by sector data
-        capacity_df: Capacity by source data
-        prices_df: Electricity prices data
+        generation_df: Generation by source data (from EIA-923)
 
     Returns:
         DataFrame: Master dataset with all metrics
     """
-    print_progress("Merging datasets...")
+    print_progress("Preparing master dataset...")
 
-    # Merge all datasets
-    df = generation_df.merge(sales_df, on=['year', 'state'], how='outer')
-    df = df.merge(capacity_df, on=['year', 'state'], how='outer')
-    df = df.merge(prices_df, on=['year', 'state'], how='outer')
+    # Start with generation data
+    df = generation_df.copy()
 
     # Ensure all required generation columns exist and fill missing values with 0
     required_generation_cols = [
         'coal_generation_gwh', 'gas_generation_gwh', 'nuclear_generation_gwh',
         'hydro_generation_gwh', 'wind_generation_gwh', 'solar_generation_gwh',
-        'other_generation_gwh', 'total_generation_gwh'
+        'total_generation_gwh'
     ]
-    for col in required_generation_cols:
+
+    # Add oil and other if not present (EIA-923 has these)
+    if 'oil_generation_gwh' not in df.columns:
+        df['oil_generation_gwh'] = 0
+    if 'other_generation_gwh' not in df.columns:
+        df['other_generation_gwh'] = 0
+
+    for col in required_generation_cols + ['oil_generation_gwh', 'other_generation_gwh']:
         if col not in df.columns:
             df[col] = 0
         else:
@@ -240,9 +242,13 @@ def prepare_master_dataset(
 
     print_progress("Calculating derived metrics...")
 
-    # Net balance and surplus
-    df['net_balance_gwh'] = df['total_generation_gwh'] - df['total_sales_gwh']
-    df['surplus_percentage'] = (df['net_balance_gwh'] / df['total_generation_gwh'].replace(0, np.nan)) * 100
+    # NOTE: Sales, capacity, and price data not available from EIA-923 Excel files
+    # These fields will be set to NaN or excluded from analysis:
+    # - total_sales_gwh (not in EIA-923)
+    # - net_balance_gwh (requires sales data)
+    # - surplus_percentage (requires sales data)
+    # - capacity data (not in EIA-923)
+    # - price data (not in EIA-923)
 
     # Energy mix percentages
     df['coal_pct'] = (df['coal_generation_gwh'] / df['total_generation_gwh'].replace(0, np.nan)) * 100
@@ -283,11 +289,15 @@ def prepare_master_dataset(
 
     # Per capita metrics
     df['generation_per_capita_mwh'] = (df['total_generation_gwh'] * 1000) / df['population'].replace(0, np.nan)
-    df['consumption_per_capita_mwh'] = (df['total_sales_gwh'] * 1000) / df['population'].replace(0, np.nan)
 
-    # Capacity utilization
-    total_possible_gwh = (df['total_capacity_mw'] / 1000) * 8760
-    df['capacity_utilization_pct'] = (df['total_generation_gwh'] / total_possible_gwh.replace(0, np.nan)) * 100
+    # Sales and capacity data not available from EIA-923 - set to NaN
+    df['total_sales_gwh'] = np.nan
+    df['consumption_per_capita_mwh'] = np.nan
+    df['total_capacity_mw'] = np.nan
+    df['capacity_utilization_pct'] = np.nan
+    df['net_balance_gwh'] = np.nan
+    df['surplus_percentage'] = np.nan
+    df['avg_price_cents_per_kwh'] = np.nan
 
     # Fill infinite values with NaN
     df = df.replace([np.inf, -np.inf], np.nan)
@@ -1293,8 +1303,8 @@ def main():
 
     try:
         # 1. Load and prepare data
-        generation_df, sales_df, capacity_df, prices_df = load_eia_data()
-        master_df = prepare_master_dataset(generation_df, sales_df, capacity_df, prices_df)
+        generation_df = load_eia_data()
+        master_df = prepare_master_dataset(generation_df)
         master_df = calculate_growth_rates(master_df)
 
         # 2. Predictive modeling
