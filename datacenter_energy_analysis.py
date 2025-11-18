@@ -622,6 +622,10 @@ def run_scenario_analysis(
     # Get 2024 baseline data
     us_2024 = df[(df['state'] == 'US') & (df['year'] == 2024)].iloc[0]
 
+    # Note: total_sales_gwh not available from EIA-923, use total_generation_gwh as proxy
+    # In reality, sales ≈ 0.92-0.95 of generation (accounting for line losses)
+    estimated_sales = us_2024['total_generation_gwh'] * 0.93  # Assume 7% line losses
+
     base_year_data = {
         'solar': us_2024['solar_generation_gwh'],
         'wind': us_2024['wind_generation_gwh'],
@@ -629,7 +633,7 @@ def run_scenario_analysis(
         'nuclear': us_2024['nuclear_generation_gwh'],
         'coal': us_2024['coal_generation_gwh'],
         'hydro': us_2024['hydro_generation_gwh'],
-        'total_sales': us_2024['total_sales_gwh']
+        'total_sales': estimated_sales  # Use estimated sales based on generation
     }
 
     # Define scenarios
@@ -768,19 +772,28 @@ def perform_state_clustering(df: pd.DataFrame) -> Dict:
     # Get 2024 data for all states (excluding US total)
     df_2024 = df[(df['year'] == 2024) & (df['state'] != 'US')].copy()
 
-    # Select clustering features
+    # Select clustering features (only use available features from EIA-923)
+    # Note: surplus_percentage, avg_price_cents_per_kwh, total_capacity_mw not available
     clustering_features = [
-        'surplus_percentage',
         'renewable_pct',
-        'avg_price_cents_per_kwh',
         'generation_per_capita_mwh',
         'solar_cagr',
         'wind_cagr',
-        'total_capacity_mw'
+        'gas_cagr',
+        'coal_cagr',
+        'total_generation_cagr'
     ]
 
     # Remove states with missing data
     df_clustering = df_2024[['state', 'state_name', 'region'] + clustering_features].dropna()
+
+    if df_clustering.empty:
+        print_progress("⚠ No states with complete data for clustering - skipping analysis")
+        return {
+            'cluster_assignments': pd.DataFrame(),
+            'cluster_profiles': pd.DataFrame(),
+            'alternative_locations': {}
+        }
 
     # Standardize features
     scaler = StandardScaler()
@@ -805,33 +818,33 @@ def perform_state_clustering(df: pd.DataFrame) -> Dict:
     kmeans = KMeans(n_clusters=optimal_k, random_state=42, n_init=10)
     df_clustering['cluster'] = kmeans.fit_predict(X_scaled)
 
-    # Characterize each cluster
+    # Characterize each cluster (only use available features)
     cluster_profiles = df_clustering.groupby('cluster').agg({
-        'surplus_percentage': 'mean',
         'renewable_pct': 'mean',
-        'avg_price_cents_per_kwh': 'mean',
         'generation_per_capita_mwh': 'mean',
         'solar_cagr': 'mean',
         'wind_cagr': 'mean',
-        'total_capacity_mw': 'mean',
+        'gas_cagr': 'mean',
+        'coal_cagr': 'mean',
+        'total_generation_cagr': 'mean',
         'state': 'count'
     }).round(2)
     cluster_profiles.rename(columns={'state': 'state_count'}, inplace=True)
 
-    # Label clusters based on characteristics
+    # Label clusters based on characteristics (only using available metrics)
     cluster_labels = {}
     for cluster_id in range(optimal_k):
         profile = cluster_profiles.loc[cluster_id]
 
         # Simple heuristic labeling based on characteristics
-        if profile['renewable_pct'] > 40 and profile['surplus_percentage'] > 10:
+        if profile['renewable_pct'] > 40 and profile['solar_cagr'] > 20:
             label = 'Renewable Leaders'
-        elif profile['surplus_percentage'] < -10:
-            label = 'Constrained Markets'
-        elif profile['renewable_pct'] < 20 and profile['fossil_pct'] > 60 if 'fossil_pct' in profile else False:
+        elif profile['coal_cagr'] > -2 and profile['renewable_pct'] < 20:
             label = 'Fossil Dependent'
-        elif profile['solar_cagr'] > 40 or profile['wind_cagr'] > 15:
+        elif profile['solar_cagr'] > 30 or profile['wind_cagr'] > 15:
             label = 'Growth Markets'
+        elif profile['renewable_pct'] > 30:
+            label = 'Renewable Adopters'
         else:
             label = f'Mixed Profile {cluster_id + 1}'
 
@@ -850,10 +863,10 @@ def perform_state_clustering(df: pd.DataFrame) -> Dict:
                 (df_clustering['cluster'] == hub_cluster) &
                 (df_clustering['state'] != hub_state) &
                 (~df_clustering['state'].isin(DATACENTER_HUBS))
-            ].sort_values('surplus_percentage', ascending=False).head(5)
+            ].sort_values('renewable_pct', ascending=False).head(5)
 
-            alternative_locations[hub_state] = alternatives[['state', 'state_name', 'surplus_percentage',
-                                                              'renewable_pct', 'avg_price_cents_per_kwh']]
+            alternative_locations[hub_state] = alternatives[['state', 'state_name', 'renewable_pct',
+                                                              'solar_cagr', 'wind_cagr']]
 
     print_progress(f"✓ Created {optimal_k} state clusters")
     print_progress(f"✓ Identified alternative locations for {len(alternative_locations)} datacenter hubs")
