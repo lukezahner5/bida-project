@@ -1,7 +1,11 @@
 #!/usr/bin/env python3
 """
-EIA Electricity Data Collector - Clean Implementation
-Uses Form EIA-923 for utility-scale electricity generation ONLY
+EIA Electricity Data Collector - UTILITY-SCALE ELECTRICITY ONLY
+
+Uses: electricity/electric-power-operational-data
+Filters: sector=electric_utility (this is critical for electricity-only data)
+
+This excludes total energy (transportation, heating, etc.)
 """
 
 import requests
@@ -12,9 +16,9 @@ from pathlib import Path
 
 # Configuration
 BASE_URL = "https://api.eia.gov/v2"
-ENDPOINT = "/electricity/eia923/data/"
+ENDPOINT = "/electricity/electric-power-operational-data/data/"
 
-# Fuel type mappings (EIA-923 codes)
+# Fuel type mappings (correct facet names for electric-power-operational-data)
 FUEL_TYPES = {
     "COL": "coal",
     "NG": "natural_gas",
@@ -41,10 +45,11 @@ ALL_STATES = [
 def get_api_key() -> str:
     """Get API key from user."""
     print("=" * 70)
-    print("EIA Electricity Data Collector (Form EIA-923)")
+    print("EIA Electricity Collector - UTILITY-SCALE ONLY")
     print("=" * 70)
-    print("\nThis script collects UTILITY-SCALE ELECTRICITY generation only.")
-    print("Register for free API key at: https://www.eia.gov/opendata/register.php\n")
+    print("\nDataset: electricity/electric-power-operational-data")
+    print("Filter: sector=electric_utility (excludes total energy)")
+    print("\nRegister for free API key at: https://www.eia.gov/opendata/register.php\n")
 
     api_key = input("Enter your EIA API key: ").strip()
     if not api_key:
@@ -55,13 +60,16 @@ def get_api_key() -> str:
 
 def fetch_generation_data(api_key: str, state: str, start_year: int, end_year: int):
     """
-    Fetch electricity generation data from EIA-923.
+    Fetch utility-scale electricity generation data.
 
-    This uses the correct endpoint for ELECTRICITY ONLY (not total energy).
+    Uses electric-power-operational-data with sector=electric_utility filter.
+    This ensures we get ELECTRICITY ONLY (not total energy).
     """
     print(f"\nFetching electricity generation for {state}...")
 
-    # Build query parameters
+    url = BASE_URL + ENDPOINT
+
+    # Build query parameters using correct facet names
     params = {
         "api_key": api_key,
         "frequency": "annual",
@@ -70,20 +78,16 @@ def fetch_generation_data(api_key: str, state: str, start_year: int, end_year: i
         "offset": 0,
         "length": 5000,
         "sort[0][column]": "period",
-        "sort[0][direction]": "asc"
+        "sort[0][direction]": "asc",
+        # CRITICAL: Filter by sector to get utility-scale electricity ONLY
+        "facets[sector][]": "electric_utility",
+        # State filter
+        "facets[state][]": state
     }
 
-    # Add facets for filtering
-    # CRITICAL: Filter by sector=electric_utility to get utility-scale electricity only
-    params["facets[sector][]"] = "electric_utility"
-    params["facets[state][]"] = state
-
-    # Add fuel type filters
-    for fuel_code in FUEL_TYPES.keys():
-        # Need to use indexed parameter name for multiple values
-        params[f"facets[fuel_type_code][{fuel_code}]"] = fuel_code
-
-    url = BASE_URL + ENDPOINT
+    # Add fuel type filters (use correct facet name: fueltype)
+    for i, fuel_code in enumerate(FUEL_TYPES.keys()):
+        params[f"facets[fueltype][{i}]"] = fuel_code
 
     try:
         response = requests.get(url, params=params, timeout=30)
@@ -117,24 +121,40 @@ def process_generation_data(all_records):
     # Check what columns we have
     print(f"Available columns: {list(df.columns)}")
 
-    # The response should have:
+    # The response from electric-power-operational-data should have:
     # - period (year)
     # - state
-    # - fuel_type_code
+    # - fueltype (NOT fuel_type_code)
     # - sector
-    # - value (generation in MWh)
+    # - generation (value in MWh)
 
-    required_cols = ['period', 'state', 'fuel_type_code', 'value']
+    # Try to identify the value column
+    value_col = None
+    if 'generation' in df.columns:
+        value_col = 'generation'
+    elif 'value' in df.columns:
+        value_col = 'value'
+    else:
+        print(f"ERROR: No generation/value column found. Columns: {list(df.columns)}")
+        return pd.DataFrame()
+
+    # Check for required columns
+    required_cols = ['period', 'state', 'fueltype']
     missing = [col for col in required_cols if col not in df.columns]
 
     if missing:
         print(f"ERROR: Missing required columns: {missing}")
+        print(f"Available: {list(df.columns)}")
         return pd.DataFrame()
 
     # Clean and transform
     df['year'] = pd.to_numeric(df['period'], errors='coerce')
-    df['fuel_type'] = df['fuel_type_code'].map(FUEL_TYPES)
-    df['generation_mwh'] = pd.to_numeric(df['value'], errors='coerce')
+    df['fuel_type'] = df['fueltype'].map(FUEL_TYPES)
+
+    # Handle unmapped fuel types
+    df.loc[df['fuel_type'].isna(), 'fuel_type'] = df.loc[df['fuel_type'].isna(), 'fueltype']
+
+    df['generation_mwh'] = pd.to_numeric(df[value_col], errors='coerce')
 
     # Convert MWh to GWh
     df['generation_gwh'] = df['generation_mwh'] / 1000
@@ -171,11 +191,13 @@ def main():
     api_key = get_api_key()
 
     # Test with just a few states first to verify it's working
-    test_states = ["US", "CA", "TX", "NY"]
+    # NOTE: "US" is not a valid state code - we need to sum all states for national total
+    test_states = ["CA", "TX", "NY", "FL"]
     start_year = 2020
     end_year = 2024
 
-    print(f"\nCollecting data for {len(test_states)} locations ({start_year}-{end_year})...")
+    print(f"\nCollecting data for {len(test_states)} states ({start_year}-{end_year})...")
+    print("NOTE: Using sector=electric_utility filter for utility-scale electricity only")
 
     all_records = []
 
@@ -196,27 +218,38 @@ def main():
     print("VALIDATION CHECK")
     print("=" * 70)
 
-    us_2024 = df[(df['state'] == 'US') & (df['year'] == 2024)]
-    if not us_2024.empty:
-        total = us_2024['total_generation_gwh'].iloc[0]
-        print(f"US 2024 total generation: {total:,.0f} GWh ({total/1000:,.0f} TWh)")
-
-        if 3_900_000 <= total <= 4_500_000:
-            print("✓ CORRECT - This is electricity-only data!")
-        elif 15_000_000 <= total <= 25_000_000:
-            print("✗ ERROR - This is still total energy data (too high by ~4-5x)")
-        else:
-            print(f"? UNKNOWN - Value outside expected ranges")
-
+    # Check California (should be ~200-250 TWh)
     ca_2024 = df[(df['state'] == 'CA') & (df['year'] == 2024)]
     if not ca_2024.empty:
         total = ca_2024['total_generation_gwh'].iloc[0]
-        print(f"CA 2024 total generation: {total:,.0f} GWh ({total/1000:,.0f} TWh)")
+        print(f"CA 2024 total generation: {total:,.0f} GWh ({total/1000:,.1f} TWh)")
 
         if 180_000 <= total <= 280_000:
             print("✓ CORRECT - California electricity data looks good!")
+        elif total > 500_000:
+            print("✗ ERROR - Still pulling total energy data (too high)")
         else:
-            print(f"? Check this value")
+            print(f"? Unexpected value - expected 180-280K GWh")
+    else:
+        print("⚠ No California 2024 data found")
+
+    # Check Texas (should be ~450-550 TWh)
+    tx_2024 = df[(df['state'] == 'TX') & (df['year'] == 2024)]
+    if not tx_2024.empty:
+        total = tx_2024['total_generation_gwh'].iloc[0]
+        print(f"TX 2024 total generation: {total:,.0f} GWh ({total/1000:,.1f} TWh)")
+
+        if 400_000 <= total <= 600_000:
+            print("✓ CORRECT - Texas electricity data looks good!")
+        else:
+            print(f"? Check this value (expected 400-600K GWh)")
+    else:
+        print("⚠ No Texas 2024 data found")
+
+    # Estimate US total by summing all states collected
+    total_2024 = df[df['year'] == 2024]['total_generation_gwh'].sum()
+    print(f"\nTotal from {len(test_states)} states (2024): {total_2024:,.0f} GWh ({total_2024/1000:,.1f} TWh)")
+    print(f"(Full US total would be ~4,200 TWh when all 50 states summed)")
 
     # Save output
     output_file = Path.cwd() / "eia_electricity_test.csv"
