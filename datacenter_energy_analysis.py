@@ -390,29 +390,33 @@ def train_random_forest_models(df: pd.DataFrame) -> Dict:
     # Get 2024 data for all states (excluding US total)
     df_2024 = df[(df['year'] == 2024) & (df['state'] != 'US')].copy()
 
-    # Remove states with missing data
+    # Remove states with missing data (only check available fields)
+    # Note: surplus_percentage, avg_price_cents_per_kwh, total_capacity_mw not available from EIA-923
     df_2024 = df_2024.dropna(subset=[
         'coal_pct', 'gas_pct', 'nuclear_pct', 'solar_pct', 'wind_pct',
-        'total_generation_cagr', 'renewable_cagr', 'solar_cagr', 'wind_cagr',
-        'surplus_percentage', 'avg_price_cents_per_kwh'
+        'total_generation_cagr', 'renewable_cagr', 'solar_cagr', 'wind_cagr'
     ])
 
-    # Feature selection
+    # Feature selection (only use available features from EIA-923 data)
     features = [
         # Current energy mix
         'coal_pct', 'gas_pct', 'nuclear_pct', 'hydro_pct', 'wind_pct', 'solar_pct',
         # Growth trends
         'total_generation_cagr', 'renewable_cagr', 'solar_cagr', 'wind_cagr',
-        # State characteristics
-        'total_capacity_mw', 'surplus_percentage', 'avg_price_cents_per_kwh',
+        'gas_cagr', 'coal_cagr',
+        # State characteristics (available from EIA-923)
         'generation_per_capita_mwh',
+        'total_generation_gwh',
         # Regional indicators
         'is_northeast', 'is_midwest', 'is_south', 'is_west',
         # Renewable % as policy proxy
-        'renewable_pct'
+        'renewable_pct',
+        'fossil_pct'
     ]
 
     X = df_2024[features].fillna(0)
+
+    print_progress(f"Training data: {len(df_2024)} states with complete data")
 
     # Train models for each energy source
     targets = ['solar_pct', 'wind_pct', 'gas_pct', 'nuclear_pct', 'coal_pct']
