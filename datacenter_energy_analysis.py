@@ -914,13 +914,15 @@ def analyze_renewable_adoption(df: pd.DataFrame, rf_results: Dict) -> Dict:
     # Create binary target: will reach 50% renewable by 2030
     df_2024['will_reach_50pct_renewable'] = (df_2024['renewable_pct_2030'] > 50).astype(int)
 
-    # Select predictor features
+    # Select predictor features (only use available features from EIA-923)
+    # Note: avg_price_cents_per_kwh and surplus_percentage not available
     predictor_features = [
         'renewable_pct',
         'solar_cagr',
         'wind_cagr',
-        'avg_price_cents_per_kwh',
-        'surplus_percentage',
+        'gas_cagr',
+        'coal_cagr',
+        'total_generation_cagr',
         'generation_per_capita_mwh',
         'is_west',
         'is_midwest'
@@ -928,6 +930,15 @@ def analyze_renewable_adoption(df: pd.DataFrame, rf_results: Dict) -> Dict:
 
     # Remove missing data
     df_model = df_2024[predictor_features + ['will_reach_50pct_renewable', 'state', 'state_name']].dropna()
+
+    if df_model.empty:
+        print_progress("⚠ No states with complete data for logistic regression - skipping analysis")
+        return {
+            'model': None,
+            'coefficients': pd.DataFrame(),
+            'predictions': pd.DataFrame(),
+            'states_on_cusp': pd.DataFrame()
+        }
 
     X = df_model[predictor_features]
     y = df_model['will_reach_50pct_renewable']
@@ -991,46 +1002,55 @@ def calculate_suitability_scores(df: pd.DataFrame) -> pd.DataFrame:
     df_2024 = df[(df['year'] == 2024) & (df['state'] != 'US')].copy()
 
     # Calculate composite suitability score (0-100)
+    # Note: Modified for EIA-923 data - no surplus, price, or capacity data available
     def calc_suitability(row):
         score = 0
 
-        # Factor 1: Surplus Capacity (30 points max)
-        surplus_score = min(30, max(0, row['surplus_percentage']))
-        score += surplus_score
-
-        # Factor 2: Low Price (25 points max)
-        price = row['avg_price_cents_per_kwh']
-        price_score = max(0, 25 - (price - 7))
-        score += price_score
-
-        # Factor 3: Renewable Energy (20 points max)
-        renewable_score = min(20, row['renewable_pct'] / 5)
+        # Factor 1: Renewable Energy (35 points max - increased weight)
+        renewable_score = min(35, row['renewable_pct'] / 3)
         score += renewable_score
 
-        # Factor 4: Growth Trajectory (15 points max)
-        growth_score = min(15, max(0, row['total_generation_cagr'] * 3 + 7.5))
+        # Factor 2: Growth Trajectory (25 points max - increased weight)
+        growth_score = min(25, max(0, row['total_generation_cagr'] * 5 + 12.5))
         score += growth_score
 
-        # Factor 5: Absolute Capacity Scale (10 points max)
-        capacity_score = min(10, np.log10(row['total_capacity_mw'] + 1) - 3)
-        score += capacity_score
+        # Factor 3: Solar Growth (20 points max)
+        solar_growth_score = min(20, max(0, row['solar_cagr'] / 2))
+        score += solar_growth_score
+
+        # Factor 4: Wind Growth (15 points max)
+        wind_growth_score = min(15, max(0, row['wind_cagr']))
+        score += wind_growth_score
+
+        # Factor 5: Absolute Generation Scale (5 points max)
+        # Higher generation = more infrastructure
+        scale_score = min(5, np.log10(row['total_generation_gwh'] + 1) - 3)
+        score += scale_score
 
         return round(score, 1)
 
     df_2024['suitability_score'] = df_2024.apply(calc_suitability, axis=1)
 
     # Calculate risk score (0-100, higher = more risk)
+    # Note: Modified for EIA-923 data - focus on generation trends
     def calc_risk(row):
         risk = 0
 
-        if row['surplus_percentage'] < 0:
-            risk += 40
-        if row['avg_price_cents_per_kwh'] > 15:
-            risk += 20
+        # Negative overall growth = supply risk
         if row['total_generation_cagr'] < 0:
-            risk += 20
+            risk += 40
+
+        # Low renewable penetration = policy/sustainability risk
         if row['renewable_pct'] < 20:
+            risk += 30
+
+        # Declining renewable growth = future supply risk
+        if row['solar_cagr'] < 10 and row['wind_cagr'] < 5:
             risk += 20
+
+        # Heavy coal dependence = transition risk
+        if row['coal_pct'] > 40:
+            risk += 10
 
         return min(100, risk)
 
