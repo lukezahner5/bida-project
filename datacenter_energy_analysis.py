@@ -310,7 +310,9 @@ def prepare_master_dataset(
 
 def calculate_growth_rates(df: pd.DataFrame) -> pd.DataFrame:
     """
-    Calculate CAGR for each state across key metrics (2011-2024).
+    Calculate CAGR for each state across key metrics (2014-2024).
+
+    Note: Changed from 2011-2024 to 2014-2024 for EIA-923 data availability.
 
     Args:
         df: Master dataframe
@@ -318,38 +320,44 @@ def calculate_growth_rates(df: pd.DataFrame) -> pd.DataFrame:
     Returns:
         DataFrame: Input dataframe with added CAGR columns
     """
-    print_progress("Calculating growth rates (CAGR 2011-2024)...")
+    print_progress("Calculating growth rates (CAGR 2014-2024)...")
 
     growth_metrics = []
 
     for state in df['state'].unique():
         state_data = df[df['state'] == state].sort_values('year')
 
-        # Get 2011 and 2024 data
-        data_2011 = state_data[state_data['year'] == 2011]
+        # Get 2014 and 2024 data (EIA-923 data starts at 2014)
+        data_2014 = state_data[state_data['year'] == 2014]
         data_2024 = state_data[state_data['year'] == 2024]
 
-        if data_2011.empty or data_2024.empty:
+        if data_2014.empty or data_2024.empty:
             continue
 
-        # Calculate CAGRs for various metrics
+        # Calculate CAGRs for various metrics (10 years: 2014-2024)
         metrics = {
-            'total_generation_cagr': ('total_generation_gwh', data_2011, data_2024),
-            'renewable_cagr': ('renewable_gwh', data_2011, data_2024),
-            'solar_cagr': ('solar_generation_gwh', data_2011, data_2024),
-            'wind_cagr': ('wind_generation_gwh', data_2011, data_2024),
-            'gas_cagr': ('gas_generation_gwh', data_2011, data_2024),
-            'coal_cagr': ('coal_generation_gwh', data_2011, data_2024),
-            'sales_cagr': ('total_sales_gwh', data_2011, data_2024)
+            'total_generation_cagr': ('total_generation_gwh', data_2014, data_2024),
+            'renewable_cagr': ('renewable_gwh', data_2014, data_2024),
+            'solar_cagr': ('solar_generation_gwh', data_2014, data_2024),
+            'wind_cagr': ('wind_generation_gwh', data_2014, data_2024),
+            'gas_cagr': ('gas_generation_gwh', data_2014, data_2024),
+            'coal_cagr': ('coal_generation_gwh', data_2014, data_2024),
+            'sales_cagr': ('total_sales_gwh', data_2014, data_2024)
         }
 
         cagr_values = {'state': state}
         for cagr_name, (col_name, data_start, data_end) in metrics.items():
             start_val = data_start[col_name].values[0] if col_name in data_start.columns else 0
             end_val = data_end[col_name].values[0] if col_name in data_end.columns else 0
-            cagr_values[cagr_name] = calculate_cagr(start_val, end_val, 13)
+            # 10 years from 2014 to 2024
+            cagr_values[cagr_name] = calculate_cagr(start_val, end_val, 10)
 
         growth_metrics.append(cagr_values)
+
+    if not growth_metrics:
+        print_progress("⚠ No growth metrics calculated - missing 2014 or 2024 data")
+        # Return df unchanged if no growth data
+        return df
 
     growth_df = pd.DataFrame(growth_metrics)
 
