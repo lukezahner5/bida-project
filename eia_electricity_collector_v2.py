@@ -58,55 +58,82 @@ def get_api_key() -> str:
     return api_key
 
 
-def fetch_generation_data(api_key: str, state: str, start_year: int, end_year: int):
+def fetch_all_generation_data(api_key: str, start_year: int, end_year: int):
     """
-    Fetch utility-scale electricity generation data.
+    Fetch ALL electricity generation data.
 
-    Uses electric-power-operational-data with sector=electric_power filter.
-    This ensures we get ELECTRICITY ONLY (not total energy).
+    NOTE: This dataset does NOT support facet filtering for state, sector, or fuel_type.
+    We must fetch all data and filter in Python.
+
+    Valid facets: fuel_region, period, respondent, respondent_name, timezone
+    NOT valid: state, sector, fuel_type
     """
-    print(f"\nFetching electricity generation for {state}...")
+    print(f"\nFetching ALL electricity generation data ({start_year}-{end_year})...")
+    print("NOTE: This dataset doesn't support state/sector/fuel_type facets")
+    print("Fetching all data, will filter in Python...")
 
     url = BASE_URL + ENDPOINT
 
-    # Build query parameters
-    # NOTE: fuel_type is NOT a facet in this dataset - we filter it in Python after retrieval
-    params = {
-        "api_key": api_key,
-        "frequency": "annual",
-        "start": str(start_year),
-        "end": str(end_year),
-        "offset": 0,
-        "length": 5000,
-        "sort[0][column]": "period",
-        "sort[0][direction]": "asc",
-        # CRITICAL: Filter by sector to get utility-scale electricity ONLY
-        "facets[sector][]": "electric_power",
-        # State filter
-        "facets[state][]": state
-    }
+    all_records = []
+    offset = 0
+    batch_size = 5000
 
-    try:
-        response = requests.get(url, params=params, timeout=30)
-        response.raise_for_status()
+    while True:
+        # Build query parameters - NO FACETS (not supported)
+        params = {
+            "api_key": api_key,
+            "frequency": "annual",
+            "start": str(start_year),
+            "end": str(end_year),
+            "offset": offset,
+            "length": batch_size,
+            "sort[0][column]": "period",
+            "sort[0][direction]": "asc"
+        }
 
-        data = response.json()
+        try:
+            print(f"  Fetching records {offset} to {offset + batch_size}...")
+            response = requests.get(url, params=params, timeout=60)
+            response.raise_for_status()
 
-        if "response" in data and "data" in data["response"]:
-            records = data["response"]["data"]
-            print(f"  ✓ Retrieved {len(records)} records")
-            return records
-        else:
-            print(f"  ✗ No data in response")
-            return []
+            data = response.json()
 
-    except requests.exceptions.RequestException as e:
-        print(f"  ✗ Request failed: {e}")
-        return []
+            if "response" in data and "data" in data["response"]:
+                records = data["response"]["data"]
+                all_records.extend(records)
+                print(f"  ✓ Retrieved {len(records)} records (total so far: {len(all_records)})")
+
+                # Check if we got fewer records than requested (indicates last page)
+                if len(records) < batch_size:
+                    print(f"  ✓ Reached end of data")
+                    break
+
+                offset += batch_size
+                time.sleep(0.5)  # Rate limiting between pages
+            else:
+                print(f"  ✗ No data in response")
+                break
+
+        except requests.exceptions.RequestException as e:
+            print(f"  ✗ Request failed: {e}")
+            if all_records:
+                print(f"  Continuing with {len(all_records)} records fetched so far...")
+                break
+            else:
+                return []
+
+    print(f"\n✓ Total records fetched: {len(all_records)}")
+    return all_records
 
 
-def process_generation_data(all_records):
-    """Convert raw API records to clean DataFrame."""
+def process_generation_data(all_records, filter_states=None):
+    """Convert raw API records to clean DataFrame.
+
+    Args:
+        all_records: Raw records from API
+        filter_states: List of state codes to filter (e.g., ["CA", "TX"])
+                      If None, includes all states
+    """
     if not all_records:
         print("No data to process!")
         return pd.DataFrame()
@@ -136,7 +163,7 @@ def process_generation_data(all_records):
         return pd.DataFrame()
 
     # Check for required columns
-    required_cols = ['period', 'state', 'fuel_type']
+    required_cols = ['period', 'state', 'fuel_type', 'sector']
     missing = [col for col in required_cols if col not in df.columns]
 
     if missing:
@@ -144,14 +171,29 @@ def process_generation_data(all_records):
         print(f"Available: {list(df.columns)}")
         return pd.DataFrame()
 
+    print(f"\nApplying filters in Python (facets not supported by this dataset):")
+
+    # Filter to electric_power sector ONLY (utility-scale electricity)
+    print(f"  Original records: {len(df)}")
+    df = df[df['sector'] == 'electric_power'].copy()
+    print(f"  After sector=electric_power filter: {len(df)}")
+
+    # Filter to desired states if specified
+    if filter_states:
+        df = df[df['state'].isin(filter_states)].copy()
+        print(f"  After state filter {filter_states}: {len(df)}")
+
+    # Filter to only fuel types we care about
+    valid_fuel_codes = list(FUEL_TYPES.keys())
+    df = df[df['fuel_type'].isin(valid_fuel_codes)].copy()
+    print(f"  After fuel_type filter: {len(df)}")
+
+    if df.empty:
+        print("WARNING: No records remain after filtering!")
+        return pd.DataFrame()
+
     # Clean and transform
     df['year'] = pd.to_numeric(df['period'], errors='coerce')
-
-    # Filter to only fuel types we care about (fuel_type is not a facet, so filter in Python)
-    valid_fuel_codes = list(FUEL_TYPES.keys())
-    print(f"Filtering to valid fuel types: {valid_fuel_codes}")
-    df = df[df['fuel_type'].isin(valid_fuel_codes)].copy()
-    print(f"Records after fuel filtering: {len(df)}")
 
     # Map fuel codes to readable names
     df['fuel_name'] = df['fuel_type'].map(FUEL_TYPES)
@@ -199,23 +241,24 @@ def main():
     api_key = get_api_key()
 
     # Test with just a few states first to verify it's working
-    # NOTE: "US" is not a valid state code - we need to sum all states for national total
+    # NOTE: This dataset requires fetching ALL data, then filtering in Python
     test_states = ["CA", "TX", "NY", "FL"]
     start_year = 2020
     end_year = 2024
 
-    print(f"\nCollecting data for {len(test_states)} states ({start_year}-{end_year})...")
-    print("NOTE: Using sector=electric_power filter for utility-scale electricity only")
+    print(f"\nTarget states for analysis: {test_states}")
+    print(f"Time range: {start_year}-{end_year}")
+    print("\nNOTE: This dataset doesn't support state/sector/fuel_type facets")
+    print("Fetching all data, then filtering to:")
+    print(f"  - Sector: electric_power (utility-scale only)")
+    print(f"  - States: {', '.join(test_states)}")
+    print(f"  - Fuel types: {', '.join(FUEL_TYPES.keys())}")
 
-    all_records = []
+    # Fetch ALL data (no state filter possible in API)
+    all_records = fetch_all_generation_data(api_key, start_year, end_year)
 
-    for state in test_states:
-        records = fetch_generation_data(api_key, state, start_year, end_year)
-        all_records.extend(records)
-        time.sleep(0.5)  # Rate limiting
-
-    # Process data
-    df = process_generation_data(all_records)
+    # Process and filter data in Python
+    df = process_generation_data(all_records, filter_states=test_states)
 
     if df.empty:
         print("\nNo data collected. Exiting.")
