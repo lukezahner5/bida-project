@@ -3,7 +3,7 @@
 EIA Electricity Data Collector - UTILITY-SCALE ELECTRICITY ONLY
 
 Uses: electricity/electric-power-operational-data
-Filters: sector=electric_utility (this is critical for electricity-only data)
+Filters: sector=electric_power (this is critical for electricity-only data)
 
 This excludes total energy (transportation, heating, etc.)
 """
@@ -18,18 +18,18 @@ from pathlib import Path
 BASE_URL = "https://api.eia.gov/v2"
 ENDPOINT = "/electricity/electric-power-operational-data/data/"
 
-# Fuel type mappings (correct facet names for electric-power-operational-data)
+# Fuel type mappings (valid codes for electric-power-operational-data)
 FUEL_TYPES = {
     "COL": "coal",
     "NG": "natural_gas",
     "NUC": "nuclear",
-    "HYC": "hydro",
+    "WAT": "hydro",        # WAT, not HYC
     "WND": "wind",
     "SUN": "solar",
     "GEO": "geothermal",
-    "BIO": "biomass",
-    "OTH": "other",
-    "PEL": "petroleum"
+    "BM": "biomass",       # BM, not BIO
+    "WH": "waste_heat",    # Waste heat
+    "OTH": "other"         # PEL (petroleum) removed - not valid
 }
 
 # US States
@@ -48,7 +48,7 @@ def get_api_key() -> str:
     print("EIA Electricity Collector - UTILITY-SCALE ONLY")
     print("=" * 70)
     print("\nDataset: electricity/electric-power-operational-data")
-    print("Filter: sector=electric_utility (excludes total energy)")
+    print("Filter: sector=electric_power (excludes total energy)")
     print("\nRegister for free API key at: https://www.eia.gov/opendata/register.php\n")
 
     api_key = input("Enter your EIA API key: ").strip()
@@ -62,7 +62,7 @@ def fetch_generation_data(api_key: str, state: str, start_year: int, end_year: i
     """
     Fetch utility-scale electricity generation data.
 
-    Uses electric-power-operational-data with sector=electric_utility filter.
+    Uses electric-power-operational-data with sector=electric_power filter.
     This ensures we get ELECTRICITY ONLY (not total energy).
     """
     print(f"\nFetching electricity generation for {state}...")
@@ -80,14 +80,14 @@ def fetch_generation_data(api_key: str, state: str, start_year: int, end_year: i
         "sort[0][column]": "period",
         "sort[0][direction]": "asc",
         # CRITICAL: Filter by sector to get utility-scale electricity ONLY
-        "facets[sector][]": "electric_utility",
+        "facets[sector][]": "electric_power",
         # State filter
         "facets[state][]": state
     }
 
-    # Add fuel type filters (use correct facet name: fueltype)
+    # Add fuel type filters (use correct facet name: fuel_type)
     for i, fuel_code in enumerate(FUEL_TYPES.keys()):
-        params[f"facets[fueltype][{i}]"] = fuel_code
+        params[f"facets[fuel_type][{i}]"] = fuel_code
 
     try:
         response = requests.get(url, params=params, timeout=30)
@@ -124,7 +124,7 @@ def process_generation_data(all_records):
     # The response from electric-power-operational-data should have:
     # - period (year)
     # - state
-    # - fueltype (NOT fuel_type_code)
+    # - fuel_type (NOT fueltype or fuel_type_code)
     # - sector
     # - generation (value in MWh)
 
@@ -139,7 +139,7 @@ def process_generation_data(all_records):
         return pd.DataFrame()
 
     # Check for required columns
-    required_cols = ['period', 'state', 'fueltype']
+    required_cols = ['period', 'state', 'fuel_type']
     missing = [col for col in required_cols if col not in df.columns]
 
     if missing:
@@ -149,10 +149,13 @@ def process_generation_data(all_records):
 
     # Clean and transform
     df['year'] = pd.to_numeric(df['period'], errors='coerce')
-    df['fuel_type'] = df['fueltype'].map(FUEL_TYPES)
+    df['fuel_name'] = df['fuel_type'].map(FUEL_TYPES)
 
-    # Handle unmapped fuel types
-    df.loc[df['fuel_type'].isna(), 'fuel_type'] = df.loc[df['fuel_type'].isna(), 'fueltype']
+    # Handle unmapped fuel types (keep original code if not in mapping)
+    df.loc[df['fuel_name'].isna(), 'fuel_name'] = df.loc[df['fuel_name'].isna(), 'fuel_type']
+
+    # Now use fuel_name as our fuel_type column for consistency
+    df['fuel_type'] = df['fuel_name']
 
     df['generation_mwh'] = pd.to_numeric(df[value_col], errors='coerce')
 
@@ -197,7 +200,7 @@ def main():
     end_year = 2024
 
     print(f"\nCollecting data for {len(test_states)} states ({start_year}-{end_year})...")
-    print("NOTE: Using sector=electric_utility filter for utility-scale electricity only")
+    print("NOTE: Using sector=electric_power filter for utility-scale electricity only")
 
     all_records = []
 
